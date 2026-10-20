@@ -1,0 +1,9 @@
+# Runtime dependencies. Kept in sync with pyproject.toml's [project.dependencies].
+#
+# yt-dlp is pinned only at the floor: YouTube changes frequently break older
+# extractor versions, so this project should generally be run against the
+# newest yt-dlp available. See README > "Keeping yt-dlp up to date".
+# The extras are required for YouTube: `default` brings the yt-dlp-ejs
+# challenge solver, `deno` the JavaScript runtime that runs it.
+yt-dlp[default,deno]>=2026.8.19
+PySide6~=6.7

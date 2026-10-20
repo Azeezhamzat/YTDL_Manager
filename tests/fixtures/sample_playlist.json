@@ -1,0 +1,32 @@
+{
+    "id": "PLsampleplaylist12345",
+    "title": "Sample Playlist",
+    "webpage_url": "https://www.youtube.com/playlist?list=PLsampleplaylist12345",
+    "entries": [
+        {
+            "id": "vid001",
+            "title": "Episode 1",
+            "webpage_url": "https://www.youtube.com/watch?v=vid001",
+            "duration": 300,
+            "availability": "public",
+            "formats": []
+        },
+        {
+            "id": "vid002",
+            "title": "Episode 2 (Private)",
+            "webpage_url": "https://www.youtube.com/watch?v=vid002",
+            "duration": 280,
+            "availability": "private",
+            "formats": []
+        },
+        null,
+        {
+            "id": "vid004",
+            "title": "Episode 4",
+            "webpage_url": "https://www.youtube.com/watch?v=vid004",
+            "duration": 310,
+            "availability": "public",
+            "formats": []
+        }
+    ]
+}

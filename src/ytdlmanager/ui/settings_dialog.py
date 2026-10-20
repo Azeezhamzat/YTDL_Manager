@@ -1,0 +1,137 @@
+from __future__ import annotations
+
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
+)
+
+from ..config import MAX_CONCURRENCY
+from ..models import AppSettings, DuplicatePolicy
+from ..ytdlp_backend import COOKIE_BROWSER_CHOICES
+
+# Plain-string userData rather than None for "off": PySide6's QVariant
+# round-trip of None out of a QComboBox isn't reliable.
+_COOKIES_OFF = "off"
+
+
+class SettingsDialog(QDialog):
+    def __init__(self, settings: AppSettings, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Settings")
+        self.setMinimumWidth(420)
+        self._settings = settings
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        layout.addLayout(form)
+
+        dir_row = QHBoxLayout()
+        self.dir_edit = QLineEdit(settings.default_download_dir)
+        self.dir_edit.setAccessibleName("Default download folder")
+        browse_btn = QPushButton("Browse…")
+        browse_btn.clicked.connect(self._browse)
+        dir_row.addWidget(self.dir_edit)
+        dir_row.addWidget(browse_btn)
+        form.addRow("Default download folder:", dir_row)
+
+        self.concurrency_spin = QSpinBox()
+        self.concurrency_spin.setRange(1, MAX_CONCURRENCY)
+        self.concurrency_spin.setValue(settings.concurrency)
+        self.concurrency_spin.setAccessibleName("Concurrent downloads")
+        form.addRow("Concurrent downloads:", self.concurrency_spin)
+
+        self.duplicate_combo = QComboBox()
+        self.duplicate_combo.addItem("Rename automatically", DuplicatePolicy.RENAME)
+        self.duplicate_combo.addItem("Overwrite existing file", DuplicatePolicy.OVERWRITE)
+        self.duplicate_combo.addItem("Skip download", DuplicatePolicy.SKIP)
+        idx = self.duplicate_combo.findData(settings.duplicate_policy)
+        self.duplicate_combo.setCurrentIndex(max(idx, 0))
+        self.duplicate_combo.setAccessibleName("Duplicate file behaviour")
+        form.addRow("If a file already exists:", self.duplicate_combo)
+
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("Match system", "system")
+        self.theme_combo.addItem("Light", "light")
+        self.theme_combo.addItem("Dark", "dark")
+        idx = self.theme_combo.findData(settings.theme)
+        self.theme_combo.setCurrentIndex(max(idx, 0))
+        self.theme_combo.setAccessibleName("Theme")
+        form.addRow("Theme:", self.theme_combo)
+
+        self.retry_spin = QSpinBox()
+        self.retry_spin.setRange(1, 10)
+        self.retry_spin.setValue(settings.retry_attempts)
+        self.retry_spin.setAccessibleName("Retry attempts for temporary failures")
+        form.addRow("Retry attempts:", self.retry_spin)
+
+        self.preserve_order_check = QCheckBox("Preserve playlist order in filenames by default")
+        self.preserve_order_check.setChecked(settings.preserve_playlist_order)
+        form.addRow("", self.preserve_order_check)
+
+        self.check_updates_check = QCheckBox("Check for yt-dlp updates on startup")
+        self.check_updates_check.setChecked(settings.check_for_updates)
+        self.check_updates_check.setToolTip(
+            "Looks up the latest yt-dlp version on PyPI on startup (a public,\n"
+            "anonymous version check -- no personal data is sent). yt-dlp needs\n"
+            "to stay current since platforms change often enough to break it."
+        )
+        form.addRow("", self.check_updates_check)
+
+        self.cookies_combo = QComboBox()
+        self.cookies_combo.addItem("Off (no cookies)", _COOKIES_OFF)
+        for browser in COOKIE_BROWSER_CHOICES:
+            self.cookies_combo.addItem(browser.capitalize(), browser)
+        idx = self.cookies_combo.findData(settings.cookies_browser or _COOKIES_OFF)
+        self.cookies_combo.setCurrentIndex(max(idx, 0))
+        self.cookies_combo.setAccessibleName("YouTube sign-in from browser")
+        form.addRow("YouTube sign-in from:", self.cookies_combo)
+        cookies_hint = QLabel(
+            "Uses your signed-in YouTube session from this browser, so YouTube doesn't "
+            "block downloads with \"Sign in to confirm you're not a bot\". Only sent to "
+            "YouTube, never to other sites. macOS asks once for Keychain access (choose "
+            "Always Allow); Safari also needs Full Disk Access. YouTube can rate-limit an "
+            "account used this way, so a secondary Google account is safer."
+        )
+        cookies_hint.setObjectName("sectionHint")
+        cookies_hint.setWordWrap(True)
+        form.addRow("", cookies_hint)
+
+        button_flags = QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        buttons = QDialogButtonBox(button_flags)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _browse(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Choose default download folder", self.dir_edit.text()
+        )
+        if chosen:
+            self.dir_edit.setText(chosen)
+
+    def result_settings(self) -> AppSettings:
+        chosen_dir = self.dir_edit.text().strip()
+        return AppSettings(
+            default_download_dir=chosen_dir or self._settings.default_download_dir,
+            concurrency=self.concurrency_spin.value(),
+            duplicate_policy=DuplicatePolicy(self.duplicate_combo.currentData()),
+            theme=self.theme_combo.currentData(),
+            preserve_playlist_order=self.preserve_order_check.isChecked(),
+            retry_attempts=self.retry_spin.value(),
+            check_for_updates=self.check_updates_check.isChecked(),
+            cookies_browser=_cookies_choice(self.cookies_combo.currentData()),
+        )
+
+
+def _cookies_choice(data: object) -> str | None:
+    return None if data in (None, _COOKIES_OFF) else str(data)

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=YTDLManager
+Comment=Local Social Media Download Manager (YouTube, TikTok, Twitter/X, Instagram, Facebook, Vimeo)
+Exec="__INSTALL_DIR__/YTDLManager"
+Icon=applications-multimedia
+Terminal=false
+Categories=AudioVideo;Network;Qt;
+StartupNotify=true

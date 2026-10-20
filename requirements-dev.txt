@@ -1,0 +1,8 @@
+# Development-only dependencies (testing, linting, type-checking, packaging).
+# Kept in sync with pyproject.toml's [project.optional-dependencies.dev].
+-r requirements.txt
+pytest~=8.3
+pytest-cov~=5.0
+ruff~=0.6
+mypy~=1.11
+pyinstaller~=6.10

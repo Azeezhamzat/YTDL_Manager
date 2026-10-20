@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ytdlmanager"
+version = "0.1.0"
+description = "Local social media (YouTube/TikTok/Twitter/Instagram/Facebook/Vimeo) download manager for content you own or are authorised to save"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Local user" }]
+# yt-dlp releases very frequently because YouTube changes break extraction often.
+# We pin only a floor (a version known to work at the time this project was written)
+# and deliberately leave the ceiling open. See README "Keeping yt-dlp up to date".
+# The `default` and `deno` extras are required for YouTube (challenge solver
+# and the JavaScript runtime that runs it).
+dependencies = [
+    "yt-dlp[default,deno]>=2026.8.19",
+    "PySide6~=6.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest~=8.3",
+    "pytest-cov~=5.0",
+    "ruff~=0.6",
+    "mypy~=1.11",
+    "pyinstaller~=6.10",
+]
+
+[project.scripts]
+ytdlmanager = "ytdlmanager.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores = true
+namespace_packages = true
+explicit_package_bases = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
