@@ -19,3 +19,6 @@ htmlcov/
 *.log
 
 .DS_Store
+
+# Packaged downloads (installers, disk images, AppImages)
+release/

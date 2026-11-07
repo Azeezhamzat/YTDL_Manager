@@ -34,8 +34,10 @@ is also shown inside the application at all times.
 ## Contents
 
 - [Supported platforms](#supported-platforms)
-- **Get started** — pick the guide for your computer, each one complete on
-  its own, start to finish:
+- **[Download & install](#download--install)** — ready-made apps for macOS,
+  Windows and Linux; no Python needed
+- **Get started from source** — pick the guide for your computer, each one
+  complete on its own, start to finish:
   - [macOS](#get-started-on-macos)
   - [Windows](#get-started-on-windows)
   - [Linux](#get-started-on-linux)
@@ -71,6 +73,44 @@ the opt-in YouTube sign-in (YouTube URLs only) — see
 upgrading yt-dlp (`pip install -U "yt-dlp[default,deno]"`, inside the
 virtual environment from whichever guide below you used) is the first thing
 to try before assuming it's unsupported.
+
+## Download & install
+
+Ready-made apps are on the
+[Releases page](https://github.com/Azeezhamzat/YTDL_Manager/releases/latest)
+— no Python or terminal needed. Pick the file for your computer:
+
+| Your computer | Download | How to install |
+|---|---|---|
+| **Mac** (Apple Silicon: M1 or later) | `YTDLManager-<version>-macos-arm64.dmg` | Open it and drag **YTDL Manager** into **Applications**. |
+| **Windows 10/11** (64-bit) | `YTDLManager-<version>-windows-x64-setup.exe` | Run it. Installs for your user only (no administrator rights needed), adds a Start menu entry and an uninstaller. |
+| | `…-windows-x64-portable.zip` | No install: unzip anywhere and run `YTDLManager.exe`. |
+| **Linux** (x86_64) | `YTDLManager-<version>-linux-x86_64.AppImage` | `chmod +x YTDLManager-*.AppImage`, then double-click it or run it. |
+| | `…-linux-x86_64.tar.gz` | Unpack it and run `./install_linux.sh` to add YTDL Manager to your app menu (installs under your home folder; no `sudo`). |
+
+Then **install FFmpeg** (step 3 of the guide for your system, below) — the
+app needs it to merge video with audio and to convert audio, and tells you
+on start-up if it's missing. Everything else, including the JavaScript
+runtime YouTube needs, is built in.
+
+**First launch warnings.** The apps aren't signed with a paid Apple /
+Microsoft developer certificate, so the system warns once:
+
+- **macOS:** "Apple could not verify…". Click **Done**, then open
+  **System Settings → Privacy & Security**, scroll down and click **Open
+  Anyway** next to YTDL Manager. (On older macOS: right-click the app →
+  **Open** → **Open**.)
+- **Windows:** "Windows protected your PC" (SmartScreen). Click **More info
+  → Run anyway**.
+- **Linux AppImage:** if it won't start with an error mentioning
+  `libfuse.so.2`, install FUSE 2 (`sudo apt install libfuse2` on Ubuntu
+  22.04, `libfuse2t64` on 24.04) — or use the `.tar.gz` instead. On very
+  minimal systems Qt may also need `sudo apt install libxcb-cursor0`.
+
+Each release also lists `SHA256SUMS.txt` to check a download wasn't
+corrupted (`shasum -a 256 <file>` on macOS/Linux, `Get-FileHash <file>` in
+PowerShell). Intel Macs and other systems can run the app from source with
+the guides below.
 
 ---
 
@@ -652,6 +692,7 @@ Downloader/
 │           ├── models_qt.py      # Qt table models (playlist selection, queue)
 │           ├── metadata_worker.py# background metadata fetch (QRunnable)
 │           ├── settings_dialog.py
+│           ├── about_dialog.py   # versions, data/log folders, Copy details
 │           ├── icons.py          # themed line icons (inline SVG)
 │           ├── widgets.py        # wrapping toolbar, status pills, progress bars
 │           └── theme.py          # light/dark stylesheets
@@ -676,11 +717,20 @@ Downloader/
 │   ├── test_worker_lifecycle.py           # one worker per item; pause/cancel/remove reach waiting workers
 │   ├── test_youtube_block_and_cookies.py  # bot-check handling, opt-in YouTube sign-in, Deno
 │   └── test_integration_real_download.py   # opt-in, real network (see above)
+├── .github/workflows/build.yml   # CI: tests on 3 OSes; builds + releases installers on tags
 └── packaging/
-    ├── pyinstaller.spec
+    ├── pyinstaller.spec          # PyInstaller build (all OSes)
     ├── entry_point.py
+    ├── smoke_test.py             # launches a built app headless to check it starts
+    ├── make_icons.py             # renders packaging/icons/ from the app icon SVG
+    ├── icons/                    # YTDLManager.icns / .ico, ytdlmanager.png
+    ├── macos/build_dmg.sh        # macOS: drag-to-Applications .dmg
+    ├── windows/
+    │   ├── build_installer.ps1   # Windows: setup .exe + portable .zip
+    │   └── ytdlmanager.iss       # Inno Setup installer definition
+    ├── linux/build_appimage.sh   # Linux: AppImage + .tar.gz
     ├── install_linux.sh          # Linux: installs a clickable app-menu entry
-    ├── install_windows.ps1       # Windows: creates a Desktop shortcut
+    ├── install_windows.ps1       # Windows (dev builds): creates a Desktop shortcut
     └── ytdlmanager.desktop.template
 ```
 
@@ -697,32 +747,57 @@ must build **on** the target OS — PyInstaller does not cross-compile, so a
 Windows `.exe` can only be produced by running PyInstaller on Windows, and
 likewise for macOS and Linux.
 
-Raw output per OS (before the per-OS "make it clickable" steps each guide
-above walks through):
+Raw PyInstaller output per OS:
 
 - **macOS:** `packaging/dist/YTDLManager.app` (also a plain `packaging/dist/YTDLManager/` folder build)
 - **Windows:** `packaging/dist/YTDLManager/YTDLManager.exe`
 - **Linux:** `packaging/dist/YTDLManager/YTDLManager`
 
-**Verification status, precisely:** built, launched, and used on macOS
-(arm64) as part of this project's development. Windows and Linux were
-**not** built or run in the environment this project was developed in (no
-such machine was available there); what was done for them instead was a
-full source review for portability (path handling, subprocess/console
-behavior, encoding, per-OS FFmpeg detection) plus fixes for two real issues
-that review turned up:
-- a Windows-only console-flash bug (a windowed build's own FFmpeg version
-  check would briefly flash a console window without an explicit
-  `CREATE_NO_WINDOW` flag — fixed in `ffmpeg_utils.py`),
-- a Windows-only logging crash risk (`sys.stderr` can be `None` in a
-  windowed PyInstaller build, which a plain `logging.StreamHandler()`
-  doesn't handle — fixed in `app.py` to skip that handler when there's no
-  real stream, keeping the file log as the source of truth either way).
+The downloads on the Releases page are made from that output:
 
-The Linux install script's file-copying and `.desktop`-generation logic was
-exercised locally (with `$HOME` sandboxed) to confirm it behaves correctly;
-running the resulting Linux binary itself still needs a real Linux machine
-to fully confirm.
+| OS | Script (tool) | Produces |
+|---|---|---|
+| macOS | `packaging/macos/build_dmg.sh` (`hdiutil`) | `YTDLManager-<version>-macos-<arch>.dmg`, a drag-to-Applications disk image |
+| Windows | `packaging/windows/build_installer.ps1` ([Inno Setup](https://jrsoftware.org/isinfo.php), `ytdlmanager.iss`) | `…-windows-x64-setup.exe` (per-user installer, Start menu entry, uninstaller) and `…-windows-x64-portable.zip` |
+| Linux | `packaging/linux/build_appimage.sh` ([appimagetool](https://github.com/AppImage/appimagetool)) | `…-linux-<arch>.AppImage` and `…-linux-<arch>.tar.gz` (program folder + `install_linux.sh`) |
+
+**Automated builds.** `.github/workflows/build.yml` runs on GitHub's macOS
+(Apple Silicon), Windows and Ubuntu 22.04 machines. Every push to `main`
+runs the test suite on all three. Pushing a version tag, or starting the
+workflow by hand from the repository's **Actions** tab, also builds the app
+on each OS, launches the result headless with `packaging/smoke_test.py` (it
+must start, keep running, and find its bundled Deno), and packages it; a
+tag then publishes all the downloads plus `SHA256SUMS.txt` as a GitHub
+Release:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+**One version number**, in `src/ytdlmanager/__init__.py`: the package
+metadata, the PyInstaller build and every installer read it from there.
+
+**App icon:** drawn from a single SVG (`APP_ICON_SVG` in `ui/icons.py`,
+also used for the window icon at runtime). After changing it, regenerate
+the per-OS files in `packaging/icons/` (`.icns`, `.ico`, `.png`) with
+`python packaging/make_icons.py` on a Mac.
+
+**Not code-signed.** Signing needs a paid Apple Developer ID (plus
+notarization) and a Windows code-signing certificate, so first launch shows
+the warnings described in [Download & install](#download--install). The
+hooks are there when that changes: `codesign_identity` in the spec,
+`SignTool` in the Inno Setup script.
+
+**Linux compatibility.** The bundled libraries need at least the glibc of
+the build machine — Ubuntu 22.04 in CI, so roughly Ubuntu 22.04+, Debian
+12+, Fedora 36+ and similarly recent distributions.
+
+**Verification status:** the macOS build is built, smoke-tested and used on
+Apple Silicon. Windows and Linux builds are produced, unit-tested and
+smoke-tested (a real headless launch of the packaged app) by CI on each
+release; they haven't been exercised by hand on a Windows or Linux desktop
+by this project yet.
 
 **FFmpeg is deliberately not bundled** into the package: it's a large
 (tens of MB) binary with its own licensing considerations depending on build
@@ -739,14 +814,6 @@ environment's `deno` package (installed by `yt-dlp[deno]`) into
 `deno_bin/`, where `js_runtime.py` finds it at runtime; if it's missing at
 build time PyInstaller prints a warning and the build falls back to any Deno
 installed on the machine.
-
-To create a distributable archive/installer beyond the raw folder (e.g. a
-`.dmg` on macOS, an NSIS/Inno Setup installer on Windows, an `.AppImage` or
-`.deb` on Linux), wrap the `packaging/dist/` output with the platform's
-usual tool (`hdiutil`/`create-dmg` on macOS, `iscc`/NSIS on Windows,
-`appimagetool`/`dpkg-deb` on Linux) — these are standard OS-level packaging
-steps outside PyInstaller's scope and are not included here to keep the
-build reproducible with just `pip` + `pyinstaller`.
 
 ## Dependency licences
 
@@ -809,10 +876,11 @@ pip-licenses --format=markdown --with-urls --order=license
 - **yt-dlp needs to stay current.** Because every supported platform changes
   frequently, an old yt-dlp version can start failing extraction; see
   [Keeping yt-dlp up to date](#keeping-yt-dlp-up-to-date).
-- **Windows/Linux packaging** was written, source-reviewed for portability,
-  and had two real Windows-specific issues fixed as a result (console-flash
-  on FFmpeg detection, a logging handler that assumed a console exists) —
-  but only actually built and launch-verified on macOS in the environment
-  this project was developed in. See [How packaging works](#how-packaging-works)
-  for the precise verification status, and the "Get started" guide for your
-  OS above for the exact commands to build and verify it yourself.
+- **Ready-made apps are unsigned** (no paid Apple/Microsoft developer
+  certificate), so macOS and Windows warn on first launch; see
+  [Download & install](#download--install). Only Apple Silicon Macs get a
+  ready-made app; Intel Macs can run from source.
+- **Windows and Linux builds are verified by CI, not by hand.** Each
+  release is unit-tested and launch-tested on GitHub's Windows and Ubuntu
+  machines (see [How packaging works](#how-packaging-works)), but hasn't
+  been clicked through on a real Windows or Linux desktop by this project.

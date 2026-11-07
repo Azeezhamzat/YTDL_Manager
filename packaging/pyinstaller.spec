@@ -4,11 +4,14 @@
 # preferred over onefile: startup is faster and FFmpeg/yt-dlp errors are
 # easier to diagnose since the extracted files persist between runs.
 #
-# Usage (run from the repository root, with the dev extras installed):
-#   pyinstaller packaging/pyinstaller.spec --noconfirm
+# Usage (with the dev extras installed; paths below are relative to this
+# file, so it can be run from anywhere):
+#   cd packaging && pyinstaller pyinstaller.spec --noconfirm
 #
-# Output lands in dist/YTDLManager/ (Windows/Linux) or dist/YTDLManager.app
-# (macOS, when BUNDLE is used below).
+# Output lands in dist/YTDLManager/ (all platforms) plus dist/YTDLManager.app
+# on macOS. The per-OS installers are then made from that output by
+# packaging/macos/build_dmg.sh, packaging/windows/build_installer.ps1 and
+# packaging/linux/build_appimage.sh (see README > "How packaging works").
 #
 # FFmpeg is NOT bundled: it is a large (~50-100MB) binary with its own
 # licensing considerations (LGPL/GPL depending on build configuration), and
@@ -17,11 +20,18 @@
 # (see ytdlmanager/ffmpeg_utils.py) and shows install instructions if it's
 # missing. See README > "FFmpeg installation and detection".
 
+import re
 import sys
+from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all
 
-block_cipher = None
+HERE = Path(SPECPATH)  # noqa: F821 - provided by PyInstaller
+ROOT = HERE.parent
+ICONS = HERE / "icons"
+VERSION = re.search(
+    r'__version__ = "([^"]+)"', (ROOT / "src" / "ytdlmanager" / "__init__.py").read_text()
+).group(1)
 
 datas = []
 binaries = []
@@ -52,8 +62,8 @@ except (ImportError, FileNotFoundError):
     )
 
 a = Analysis(
-    ["entry_point.py"],
-    pathex=["../src"],
+    [str(HERE / "entry_point.py")],
+    pathex=[str(ROOT / "src")],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
@@ -62,10 +72,9 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
-    cipher=block_cipher,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,
@@ -83,12 +92,12 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(ICONS / ("YTDLManager.ico" if sys.platform == "win32" else "YTDLManager.icns")),
 )
 
 coll = COLLECT(
     exe,
     a.binaries,
-    a.zipfiles,
     a.datas,
     strip=False,
     upx=False,
@@ -100,10 +109,16 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name="YTDLManager.app",
-        icon=None,
+        icon=str(ICONS / "YTDLManager.icns"),
         bundle_identifier="com.local.ytdlmanager",
+        version=VERSION,
         info_plist={
+            "CFBundleName": "YTDL Manager",
+            "CFBundleDisplayName": "YTDL Manager",
+            "CFBundleShortVersionString": VERSION,
+            "CFBundleVersion": VERSION,
             "NSHighResolutionCapable": True,
-            "CFBundleShortVersionString": "0.1.0",
+            "LSMinimumSystemVersion": "11.0",
+            "LSApplicationCategoryType": "public.app-category.utilities",
         },
     )

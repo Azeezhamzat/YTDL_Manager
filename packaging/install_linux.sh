@@ -11,13 +11,25 @@
 # app keeps its own database (settings, history, queue) and log (see
 # ytdlmanager/config.py), and this script wipes INSTALL_DIR on every run.
 #
-# Usage (run from the packaging/ directory, after building):
+# Usage -- either from an unpacked release download
+# (YTDLManager-<version>-linux-<arch>.tar.gz):
+#   ./install_linux.sh
+# or from the packaging/ directory after building it yourself:
 #   ./install_linux.sh
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="$SCRIPT_DIR/dist/YTDLManager"
+# Release tarball: the program folder sits next to this script. Source
+# checkout: it's PyInstaller's output in dist/.
+if [ -x "$SCRIPT_DIR/YTDLManager/YTDLManager" ]; then
+    BUILD_DIR="$SCRIPT_DIR/YTDLManager"
+else
+    BUILD_DIR="$SCRIPT_DIR/dist/YTDLManager"
+fi
+ICON_SOURCE="$SCRIPT_DIR/ytdlmanager.png"
+[ -f "$ICON_SOURCE" ] || ICON_SOURCE="$SCRIPT_DIR/icons/ytdlmanager.png"
+ICON_DIR="$HOME/.local/share/icons/hicolor/512x512/apps"
 INSTALL_DIR="$HOME/.local/opt/ytdlmanager"
 # Where earlier versions of this script installed the program -- the app's
 # data folder. Only the program files are removed from it, never the data.
@@ -42,6 +54,11 @@ if [ -x "$LEGACY_INSTALL_DIR/YTDLManager" ]; then
     rm -rf "$LEGACY_INSTALL_DIR/YTDLManager" "$LEGACY_INSTALL_DIR/_internal"
 fi
 
+if [ -f "$ICON_SOURCE" ]; then
+    mkdir -p "$ICON_DIR"
+    cp "$ICON_SOURCE" "$ICON_DIR/ytdlmanager.png"
+fi
+
 mkdir -p "$APPLICATIONS_DIR"
 sed "s|__INSTALL_DIR__|$INSTALL_DIR|" "$SCRIPT_DIR/ytdlmanager.desktop.template" > "$DESKTOP_FILE"
 chmod +x "$DESKTOP_FILE"
@@ -56,5 +73,5 @@ fi
 echo "Done. YTDLManager should now appear in your application launcher."
 echo "(If it doesn't show up immediately, log out and back in once.)"
 echo
-echo "To uninstall: rm -rf '$INSTALL_DIR' '$DESKTOP_FILE'"
+echo "To uninstall: rm -rf '$INSTALL_DIR' '$DESKTOP_FILE' '$ICON_DIR/ytdlmanager.png'"
 echo "(Your settings and history live in '$LEGACY_INSTALL_DIR'; delete it too for a clean slate.)"
