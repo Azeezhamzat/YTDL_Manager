@@ -200,7 +200,10 @@ def video_info_from_dict(data: dict[str, Any]) -> VideoInfo:
     is_available = availability not in ("private", "premium_only", "subscriber_only", "needs_auth")
     return VideoInfo(
         video_id=data.get("id", ""),
-        title=data.get("title", "Untitled"),
+        # Playlist entries fetched with extract_flat often carry no title
+        # (TikTok/Instagram profiles) -- or an explicit None, which used to
+        # crash filename sanitising. The id still makes a distinct name.
+        title=data.get("title") or data.get("fulltitle") or data.get("id") or "Untitled",
         url=data.get("webpage_url") or data.get("original_url") or data.get("url", ""),
         channel=data.get("channel") or data.get("uploader"),
         duration_seconds=data.get("duration"),
@@ -246,8 +249,27 @@ AUDIO_CONTAINER_CHOICES = ("m4a", "mp3", "opus", "vorbis", "wav", "flac", "aac",
 VIDEO_CONTAINER_CHOICES = ("mp4", "webm", "mkv", "3gp")
 
 
+# The audio stream to pair with a video container. YouTube's AAC audio is
+# "m4a", never "mp4": asking for bestaudio[ext=mp4] matched nothing, so an
+# "mp4" batch quietly fell back to the pre-muxed file -- usually 360p.
+# Containers not listed (mkv) hold any codec; merge_output_format alone
+# decides the file type for them.
+_AUDIO_EXT_FOR_CONTAINER = {"mp4": "m4a", "webm": "webm"}
+
+# Audio codecs whose files yt-dlp can embed cover art into (EmbedThumbnail
+# supports mp3, m4a/mp4, mkv/mka and ogg/opus/flac; alac lands in .m4a and
+# vorbis in .ogg). Raw .aac and .wav can't carry a picture.
+_COVER_ART_CODECS = {"mp3", "m4a", "opus", "vorbis", "flac", "alac"}
+
+# Resolution caps offered in the UI ("Max quality"); None means no limit.
+MAX_HEIGHT_CHOICES = (None, 2160, 1440, 1080, 720, 480, 360)
+
+
 def build_format_selector(
-    mode: DownloadMode, format_id: str | None, container_ext: str | None = None
+    mode: DownloadMode,
+    format_id: str | None,
+    container_ext: str | None = None,
+    max_height: int | None = None,
 ) -> str:
     """Translate our high-level mode into a yt-dlp format-selection string."""
     if mode == DownloadMode.AUDIO_ONLY:
@@ -261,7 +283,13 @@ def build_format_selector(
     if mode not in (DownloadMode.BEST_QUALITY, DownloadMode.VIDEO_WITH_AUDIO):
         raise ValueError(f"Unhandled download mode: {mode}")
 
-    default = "bestvideo*+bestaudio/best"
+    # "<=?" also accepts formats that don't report a height at all.
+    cap = f"[height<=?{max_height}]" if max_height else ""
+    default = f"bestvideo*{cap}+bestaudio/best{cap}"
+    if cap:
+        # Nothing at or under the cap: still download the best there is
+        # rather than failing the item.
+        default += "/bestvideo*+bestaudio/best"
     if not container_ext:
         return default
     if container_ext in _PROGRESSIVE_ONLY_EXTS:
@@ -269,11 +297,14 @@ def build_format_selector(
         # normal best video+audio combo (a different container) if this
         # particular video doesn't offer one.
         return f"best[ext={container_ext}]/{default}"
+    audio_ext = _AUDIO_EXT_FOR_CONTAINER.get(container_ext)
+    if audio_ext is None:
+        return default
     # Try the requested container for both streams, then just the requested
     # container for a combined stream, then fall back to best-overall so one
     # video's missing format doesn't fail the whole batch.
-    both = f"bestvideo*[ext={container_ext}]+bestaudio[ext={container_ext}]"
-    combined = f"best[ext={container_ext}]"
+    both = f"bestvideo*[ext={container_ext}]{cap}+bestaudio[ext={audio_ext}]"
+    combined = f"best[ext={container_ext}]{cap}"
     return f"{both}/{combined}/{default}"
 
 
@@ -302,10 +333,13 @@ def build_ydl_opts(
     ffmpeg_location: str | None = None,
     cookies_browser: str | None = None,
     js_runtime_path: str | None = None,
+    rate_limit_bps: int | None = None,
 ) -> dict[str, Any]:
     opts: dict[str, Any] = {
         "outtmpl": output_template,
-        "format": build_format_selector(request.mode, request.format_id, request.container_ext),
+        "format": build_format_selector(
+            request.mode, request.format_id, request.container_ext, request.max_height
+        ),
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
@@ -324,6 +358,8 @@ def build_ydl_opts(
         opts["ffmpeg_location"] = ffmpeg_location
     if progress_hook:
         opts["progress_hooks"] = [progress_hook]
+    if rate_limit_bps:
+        opts["ratelimit"] = rate_limit_bps  # bytes per second, per download
     sub_langs = parse_subtitle_langs(request.subtitle_langs)
     if request.subtitles_only and not sub_langs:
         raise ValueError("Subtitles-only downloads need at least one language")
@@ -342,9 +378,10 @@ def build_ydl_opts(
         opts["skip_download"] = True
         opts["ignore_no_formats_error"] = True
         return opts
+    postprocessors = opts.setdefault("postprocessors", [])
     if request.mode == DownloadMode.AUDIO_ONLY:
         codec = request.container_ext if request.container_ext in AUDIO_CONTAINER_CHOICES else "m4a"
-        opts.setdefault("postprocessors", []).append(
+        postprocessors.append(
             {
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": codec,
@@ -355,6 +392,19 @@ def build_ydl_opts(
         opts["merge_output_format"] = request.container_ext
     else:
         opts["merge_output_format"] = "mp4"
+    if request.embed_metadata:
+        # Title, artist, date etc. (and chapters) written into the file, so
+        # music players and file browsers show more than a filename.
+        postprocessors.append({"key": "FFmpegMetadata", "add_metadata": True,
+                               "add_chapters": True})
+        # Cover art only where the output type is known to support it:
+        # yt-dlp fails the whole download for anything else (e.g. a webm
+        # video that skipped merging), so video files get tags but no art.
+        if request.mode == DownloadMode.AUDIO_ONLY and codec in _COVER_ART_CODECS:
+            opts["writethumbnail"] = True
+            postprocessors.append({"key": "EmbedThumbnail", "already_have_thumbnail": False})
+    if not postprocessors:
+        del opts["postprocessors"]
     return opts
 
 
@@ -398,6 +448,7 @@ def download_one(
     ffmpeg_location: str | None = None,
     cookies_browser: str | None = None,
     js_runtime_path: str | None = None,
+    rate_limit_bps: int | None = None,
 ) -> str:
     """Download a single item and return the final saved file path."""
     import yt_dlp
@@ -410,6 +461,7 @@ def download_one(
         ffmpeg_location=ffmpeg_location,
         cookies_browser=cookies_browser,
         js_runtime_path=js_runtime_path,
+        rate_limit_bps=rate_limit_bps,
     )
     downloaded_path: list[str] = []
     final_path: list[str] = []

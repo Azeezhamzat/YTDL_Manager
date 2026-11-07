@@ -8,6 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import (
+    QByteArray,
     QEvent,
     QItemSelectionModel,
     QModelIndex,
@@ -19,9 +20,12 @@ from PySide6.QtCore import (
     QUrl,
 )
 from PySide6.QtGui import (
+    QAction,
     QDesktopServices,
     QGuiApplication,
+    QKeySequence,
     QPixmap,
+    QShortcut,
     QStandardItem,
     QStandardItemModel,
 )
@@ -54,7 +58,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import update_check
-from ..config import LEGAL_NOTICE, MAX_CONCURRENCY, SUPPORTED_PLATFORMS_LABEL
+from ..config import LEGAL_NOTICE, MAX_CONCURRENCY, SUPPORTED_PLATFORMS_LABEL, get_log_path
 from ..db import Database
 from ..download_manager import DownloadManager
 from ..ffmpeg_utils import install_instructions
@@ -92,6 +96,8 @@ from .widgets import (
     StatusPillDelegate,
     card,
     field_label,
+    populate_quality_combo,
+    quality_choice,
 )
 
 # Several downloads running at once all hit YouTube's bot check within
@@ -173,6 +179,7 @@ class MainWindow(QMainWindow):
             concurrency=settings.concurrency,
             retry_attempts=settings.retry_attempts,
             cookies_browser=settings.cookies_browser,
+            rate_limit_bps=settings.rate_limit_bps,
         )
         self.download_manager.load_persisted_queue()
         self.download_manager.item_progress.connect(self._on_item_progress)
@@ -214,6 +221,8 @@ class MainWindow(QMainWindow):
         self._refresh_queue_table()
         self._refresh_history_table()
         self._refresh_side_status()
+        self._build_menus()
+        self._restore_window_state()
         self._check_ffmpeg()
 
         if self.download_manager.items():
@@ -450,22 +459,27 @@ class MainWindow(QMainWindow):
             "(the list fills in once a video is fetched)."
         )
         self.video_format_combo.activated.connect(self._on_video_format_picked)
+        self.video_quality_combo = QComboBox()
+        self.video_quality_combo.setAccessibleName("Maximum video quality")
+        populate_quality_combo(self.video_quality_combo, self.settings.default_max_height)
         grid.addWidget(field_label("Mode"), 1, 0)
-        grid.addWidget(field_label("Format"), 1, 1)
+        grid.addWidget(field_label("Max quality"), 1, 1)
         grid.addWidget(self.video_mode_combo, 2, 0)
-        grid.addWidget(self.video_format_combo, 2, 1)
+        grid.addWidget(self.video_quality_combo, 2, 1)
+        grid.addWidget(field_label("Format"), 3, 0, 1, 2)
+        grid.addWidget(self.video_format_combo, 4, 0, 1, 2)
 
         subtitle_row, self.video_subtitle_combo, self.video_subtitle_langs_edit = (
             self._build_subtitle_row(self._on_video_mode_changed)
         )
-        grid.addWidget(field_label("Subtitles"), 3, 0, 1, 2)
-        grid.addLayout(subtitle_row, 4, 0, 1, 2)
+        grid.addWidget(field_label("Subtitles"), 5, 0, 1, 2)
+        grid.addLayout(subtitle_row, 6, 0, 1, 2)
 
         dest_row, self.video_dest_edit = self._build_destination_row(
             self.settings.default_download_dir, "Destination folder"
         )
-        grid.addWidget(field_label("Save to"), 5, 0, 1, 2)
-        grid.addLayout(dest_row, 6, 0, 1, 2)
+        grid.addWidget(field_label("Save to"), 7, 0, 1, 2)
+        grid.addLayout(dest_row, 8, 0, 1, 2)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
 
@@ -476,7 +490,7 @@ class MainWindow(QMainWindow):
         button_row.setContentsMargins(0, 12, 0, 0)
         button_row.addStretch(1)
         button_row.addWidget(self.video_add_btn)
-        grid.addLayout(button_row, 7, 0, 1, 2)
+        grid.addLayout(button_row, 9, 0, 1, 2)
         layout.addWidget(options)
         layout.addStretch(1)
         return page
@@ -573,6 +587,12 @@ class MainWindow(QMainWindow):
         panel_layout.addWidget(field_label("Mode"))
         panel_layout.addWidget(self.playlist_mode_combo)
 
+        self.playlist_quality_combo = QComboBox()
+        self.playlist_quality_combo.setAccessibleName("Maximum video quality for the batch")
+        populate_quality_combo(self.playlist_quality_combo, self.settings.default_max_height)
+        panel_layout.addWidget(field_label("Max quality"))
+        panel_layout.addWidget(self.playlist_quality_combo)
+
         self.playlist_format_combo = QComboBox()
         self.playlist_format_combo.setAccessibleName("Preferred format for the whole batch")
         self.playlist_format_combo.activated.connect(self._on_playlist_mode_picked)
@@ -651,6 +671,9 @@ class MainWindow(QMainWindow):
         flow = FlowLayout(toolbar)
         start_btn = _button("Start all", "play", accent=True,
                             tooltip="Start every queued, paused or failed download")
+        pause_all_btn = _button("Pause all", "pause",
+                                tooltip="Pause everything that's downloading or waiting")
+        pause_all_btn.clicked.connect(self._queue_pause_all)
         pause_btn = _button("Pause", "pause", tooltip=(
             "Stop the selected transfers but keep the partial files, so Resume\n"
             "continues them later instead of starting over."
@@ -682,8 +705,8 @@ class MainWindow(QMainWindow):
         down_btn.clicked.connect(lambda: self._queue_move_selected(1))
         self.open_folder_btn.clicked.connect(self._open_folder_for_selected_queue_item)
         clear_completed_btn.clicked.connect(self._queue_clear_completed)
-        for button in (start_btn, pause_btn, resume_btn, cancel_btn, retry_btn, remove_btn,
-                       up_btn, down_btn, self.open_folder_btn, clear_completed_btn):
+        for button in (start_btn, pause_all_btn, pause_btn, resume_btn, cancel_btn, retry_btn,
+                       remove_btn, up_btn, down_btn, self.open_folder_btn, clear_completed_btn):
             flow.addWidget(button)
         layout.addWidget(toolbar)
 
@@ -1100,6 +1123,8 @@ class MainWindow(QMainWindow):
             duplicate_policy=self.settings.duplicate_policy,
             subtitle_langs=subtitle_langs,
             subtitles_only=subtitles_only,
+            max_height=quality_choice(self.video_quality_combo),
+            embed_metadata=self.settings.embed_metadata,
         )
         item = self.download_manager.enqueue(request)
         assert item.id is not None  # enqueue() always persists and assigns an id
@@ -1218,6 +1243,8 @@ class MainWindow(QMainWindow):
                 container_ext=container_ext,
                 subtitle_langs=subtitle_langs,
                 subtitles_only=subtitles_only,
+                max_height=quality_choice(self.playlist_quality_combo),
+                embed_metadata=self.settings.embed_metadata,
             )
             for video in selected
         ]
@@ -1615,6 +1642,7 @@ class MainWindow(QMainWindow):
         ).exec()
 
     def _open_settings(self) -> None:
+        previous_default_quality = self.settings.default_max_height
         dialog = SettingsDialog(self.settings, self)
         if dialog.exec():
             self.settings = dialog.result_settings()
@@ -1622,6 +1650,10 @@ class MainWindow(QMainWindow):
             self.download_manager.set_concurrency(self.settings.concurrency)
             self.download_manager.retry_attempts = self.settings.retry_attempts
             self.download_manager.cookies_browser = self.settings.cookies_browser
+            self.download_manager.rate_limit_bps = self.settings.rate_limit_bps
+            if self.settings.default_max_height != previous_default_quality:
+                for combo in (self.video_quality_combo, self.playlist_quality_combo):
+                    populate_quality_combo(combo, self.settings.default_max_height)
             self.concurrency_spin.blockSignals(True)
             self.concurrency_spin.setValue(self.settings.concurrency)
             self.concurrency_spin.blockSignals(False)
@@ -1770,6 +1802,114 @@ class MainWindow(QMainWindow):
                 f"Updating yt-dlp failed:\n\n{output[:1000]}",
             )
 
+    # ------------------------------------------------- menus and shortcuts
+    def _build_menus(self) -> None:
+        """Menu bar with the app's actions and their keyboard shortcuts. On
+        macOS, About / Settings / Quit move into the app menu by role and
+        Ctrl shortcuts become Cmd."""
+        bar = self.menuBar()
+
+        def add(menu, text, slot, shortcut=None, role=QAction.MenuRole.NoRole) -> QAction:
+            action = QAction(text, self)
+            if shortcut is not None:
+                action.setShortcut(shortcut)
+            action.setMenuRole(role)
+            action.triggered.connect(slot)
+            menu.addAction(action)
+            return action
+
+        file_menu = bar.addMenu("&File")
+        add(file_menu, "Paste Link and Fetch", self._paste_and_fetch, QKeySequence("Ctrl+Shift+V"))
+        add(file_menu, "Go to Link Box", self._focus_link_box, QKeySequence("Ctrl+L"))
+        add(file_menu, "Open Download Folder",
+            lambda: self._open_folder_path(self.settings.default_download_dir),
+            QKeySequence("Ctrl+Shift+O"))
+        file_menu.addSeparator()
+        add(file_menu, "Settings…", self._open_settings,
+            _standard_key(QKeySequence.StandardKey.Preferences, "Ctrl+,"),
+            QAction.MenuRole.PreferencesRole)
+        add(file_menu, "Quit YTDL Manager", self.close,
+            _standard_key(QKeySequence.StandardKey.Quit, "Ctrl+Q"), QAction.MenuRole.QuitRole)
+
+        downloads = bar.addMenu("&Downloads")
+        add(downloads, "Start All", self._queue_start_all, QKeySequence("Ctrl+Shift+S"))
+        add(downloads, "Pause All", self._queue_pause_all, QKeySequence("Ctrl+Shift+P"))
+        downloads.addSeparator()
+        add(downloads, "Resume Selected", self._queue_resume_selected)
+        add(downloads, "Pause Selected", self._queue_pause_selected)
+        add(downloads, "Retry Selected", self._queue_retry_selected)
+        add(downloads, "Cancel Selected", self._queue_cancel_selected)
+        add(downloads, "Remove Selected", self._queue_remove_selected)
+        downloads.addSeparator()
+        add(downloads, "Clear Finished", self._queue_clear_completed)
+
+        view = bar.addMenu("&View")
+        for index, (name, _icon_name) in enumerate(_NAV_PAGES):
+            add(view, name, lambda _checked=False, page=index: self._show_page(page),
+                QKeySequence(f"Ctrl+{index + 1}"))
+        view.addSeparator()
+        add(view, "Find…", self._focus_search, QKeySequence(QKeySequence.StandardKey.Find))
+
+        help_menu = bar.addMenu("&Help")
+        add(help_menu, "About YTDL Manager", self._open_about, role=QAction.MenuRole.AboutRole)
+        add(help_menu, "Check for Updates…", lambda: self._check_for_updates(manual=True),
+            role=QAction.MenuRole.ApplicationSpecificRole)
+        add(help_menu, "Open Log File", self._open_log_file)
+
+        # Delete/Backspace remove the selected downloads -- only while the
+        # queue list itself has focus, never from a text field or other page.
+        for key in (QKeySequence(QKeySequence.StandardKey.Delete), QKeySequence("Backspace")):
+            shortcut = QShortcut(key, self.queue_table)
+            shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+            shortcut.activated.connect(self._queue_remove_selected)
+
+    def _paste_and_fetch(self) -> None:
+        self._paste_url()
+        if classify_url(self.url_edit.text().strip()) != MediaKind.INVALID:
+            self._on_fetch_clicked()
+
+    def _focus_link_box(self) -> None:
+        self.url_edit.setFocus()
+        self.url_edit.selectAll()
+
+    def _focus_search(self) -> None:
+        target = {
+            PAGE_PLAYLIST: self.playlist_search_edit,
+            PAGE_HISTORY: self.history_search_edit,
+        }.get(self.tabs.currentIndex(), self.url_edit)
+        target.setFocus()
+        target.selectAll()
+
+    def _open_log_file(self) -> None:
+        log = Path(get_log_path())
+        if log.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(log)))
+        else:
+            self._open_folder_path(str(log.parent))
+
+    def _queue_pause_all(self) -> None:
+        paused = self.download_manager.pause_all()
+        self.status_bar.showMessage(
+            f"Paused {paused} download(s)" if paused else "Nothing is downloading or waiting",
+            4000,
+        )
+
+    # --------------------------------------------------------- window state
+    # Size, position and the last page are kept in the app's database (not
+    # QSettings), next to everything else the app remembers.
+    def _restore_window_state(self) -> None:
+        geometry = self.db.get_value("ui.window_geometry")
+        if geometry:
+            self.restoreGeometry(QByteArray.fromBase64(geometry.encode()))
+        page = self.db.get_value("ui.last_page")
+        if page and page.isdigit() and int(page) < self.tabs.count():
+            self._show_page(int(page))
+
+    def _save_window_state(self) -> None:
+        geometry = bytes(self.saveGeometry().toBase64().data()).decode()
+        self.db.set_value("ui.window_geometry", geometry)
+        self.db.set_value("ui.last_page", str(self.tabs.currentIndex()))
+
     def closeEvent(self, event) -> None:  # noqa: N802
         if self.download_manager.has_active_downloads():
             reply = QMessageBox.question(
@@ -1781,9 +1921,17 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+        self._save_window_state()
         self.download_manager.shutdown()
         self._metadata_pool.clear()
         event.accept()
+
+
+def _standard_key(standard: QKeySequence.StandardKey, fallback: str) -> QKeySequence:
+    """The platform's standard shortcut, or `fallback` where it has none
+    (Windows defines no Preferences or Quit key)."""
+    sequence = QKeySequence(standard)
+    return sequence if not sequence.isEmpty() else QKeySequence(fallback)
 
 
 def _dropped_link(mime) -> str | None:

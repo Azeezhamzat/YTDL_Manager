@@ -343,3 +343,34 @@ def test_pausing_everything_is_not_reported_as_finished(manager, transfers, tmp_
     pump(qapp, lambda: _status(manager, item.id) == QueueStatus.PAUSED)
 
     assert finished == []
+
+
+def test_pause_all_pauses_running_and_waiting_items(manager, transfers, tmp_path, qapp):
+    items = manager.enqueue_many([_request(f"PA{i}", tmp_path) for i in range(3)])
+    for item in items:
+        manager.start_item(item.id)
+    pump(qapp, lambda: transfers.calls["PA0"] == 1)
+
+    assert manager.pause_all() == 3
+    pump(qapp, lambda: all(_status(manager, i.id) == QueueStatus.PAUSED for i in items))
+
+    assert [_status(manager, i.id) for i in items] == [QueueStatus.PAUSED] * 3
+    assert transfers.calls["PA1"] == 0 and transfers.calls["PA2"] == 0
+
+
+def test_speed_limit_reaches_each_download(manager, transfers, tmp_path, qapp, monkeypatch):
+    seen = []
+    original = transfers.__call__
+
+    def recording(request, **kwargs):
+        seen.append(kwargs.get("rate_limit_bps"))
+        return original(request, **kwargs)
+
+    monkeypatch.setattr(ytdlp_backend, "download_one", recording)
+    manager.rate_limit_bps = 1024**2
+    item = manager.enqueue(_request("S", tmp_path))
+    manager.start_item(item.id)
+    pump(qapp, lambda: bool(seen))
+    _finish_all(manager, transfers, qapp)
+
+    assert seen == [1024**2]

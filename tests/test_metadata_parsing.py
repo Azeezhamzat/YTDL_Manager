@@ -96,10 +96,45 @@ def test_build_format_selector_container_ext_none_is_unchanged():
 
 
 def test_build_format_selector_merge_capable_container_ext():
+    # mp4 video pairs with "m4a" audio: YouTube's AAC audio is never labelled
+    # "mp4", so asking for bestaudio[ext=mp4] used to match nothing and fall
+    # back to the low-resolution pre-muxed file.
     selector = build_format_selector(DownloadMode.VIDEO_WITH_AUDIO, None, "mp4")
     assert selector == (
-        "bestvideo*[ext=mp4]+bestaudio[ext=mp4]/best[ext=mp4]/bestvideo*+bestaudio/best"
+        "bestvideo*[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo*+bestaudio/best"
     )
+
+
+def test_build_format_selector_webm_pairs_with_webm_audio():
+    selector = build_format_selector(DownloadMode.VIDEO_WITH_AUDIO, None, "webm")
+    assert selector.startswith("bestvideo*[ext=webm]+bestaudio[ext=webm]/")
+
+
+def test_build_format_selector_mkv_leaves_codecs_open():
+    # mkv holds any codec; merge_output_format decides the container.
+    assert build_format_selector(DownloadMode.VIDEO_WITH_AUDIO, None, "mkv") == (
+        "bestvideo*+bestaudio/best"
+    )
+
+
+def test_build_format_selector_caps_resolution_with_fallback():
+    selector = build_format_selector(DownloadMode.VIDEO_WITH_AUDIO, None, None, 720)
+    assert selector == (
+        "bestvideo*[height<=?720]+bestaudio/best[height<=?720]/bestvideo*+bestaudio/best"
+    )
+
+
+def test_build_format_selector_cap_applies_to_preferred_container():
+    selector = build_format_selector(DownloadMode.BEST_QUALITY, None, "mp4", 1080)
+    assert selector.startswith(
+        "bestvideo*[ext=mp4][height<=?1080]+bestaudio[ext=m4a]/best[ext=mp4][height<=?1080]/"
+    )
+    assert selector.endswith("/bestvideo*+bestaudio/best")  # never fails for lack of a match
+
+
+def test_build_format_selector_cap_ignored_for_audio_and_exact_formats():
+    assert build_format_selector(DownloadMode.AUDIO_ONLY, None, None, 480) == "bestaudio/best"
+    assert "height" not in build_format_selector(DownloadMode.SPECIFIC_FORMAT, "137", None, 480)
 
 
 def test_build_format_selector_progressive_only_container_ext():
@@ -217,3 +252,62 @@ def test_extract_info_allows_playlist_for_playlist_fetch(monkeypatch):
     )
 
     assert _FakeYoutubeDL.last_opts["noplaylist"] is False
+
+
+def _opts(**request_fields):
+    from ytdlmanager.models import DownloadRequest
+    from ytdlmanager.ytdlp_backend import build_ydl_opts
+
+    request = DownloadRequest(
+        url="https://www.youtube.com/watch?v=x", title="t", destination_dir="/tmp",
+        **request_fields,
+    )
+    return build_ydl_opts(request, output_template="/tmp/t.%(ext)s")
+
+
+def _pp_keys(opts):
+    return [pp["key"] for pp in opts.get("postprocessors", [])]
+
+
+def test_metadata_and_cover_art_for_audio():
+    opts = _opts(mode=DownloadMode.AUDIO_ONLY, container_ext="mp3", embed_metadata=True)
+    assert _pp_keys(opts) == ["FFmpegExtractAudio", "FFmpegMetadata", "EmbedThumbnail"]
+    assert opts["writethumbnail"] is True
+
+
+def test_no_cover_art_for_formats_that_cannot_hold_it():
+    # yt-dlp fails the whole download when asked to embed art into these.
+    for codec in ("wav", "aac"):
+        opts = _opts(mode=DownloadMode.AUDIO_ONLY, container_ext=codec, embed_metadata=True)
+        assert "EmbedThumbnail" not in _pp_keys(opts)
+        assert "writethumbnail" not in opts
+
+
+def test_video_gets_tags_but_never_cover_art():
+    opts = _opts(mode=DownloadMode.VIDEO_WITH_AUDIO, container_ext="webm", embed_metadata=True)
+    assert _pp_keys(opts) == ["FFmpegMetadata"]
+    assert "writethumbnail" not in opts
+
+
+def test_metadata_off_adds_nothing():
+    opts = _opts(mode=DownloadMode.VIDEO_WITH_AUDIO)
+    assert "postprocessors" not in opts and "writethumbnail" not in opts
+
+
+def test_speed_limit_is_passed_to_yt_dlp():
+    from ytdlmanager.models import DownloadRequest
+    from ytdlmanager.ytdlp_backend import build_ydl_opts
+
+    request = DownloadRequest(
+        url="https://youtu.be/x", title="t", destination_dir="/tmp", mode=DownloadMode.AUDIO_ONLY
+    )
+    opts = build_ydl_opts(request, output_template="t.%(ext)s", rate_limit_bps=2 * 1024**2)
+    assert opts["ratelimit"] == 2 * 1024**2
+    assert "ratelimit" not in build_ydl_opts(request, output_template="t.%(ext)s")
+
+
+def test_flat_entries_without_a_title_use_the_id():
+    from ytdlmanager.ytdlp_backend import video_info_from_dict
+
+    assert video_info_from_dict({"id": "7301234567890", "title": None}).title == "7301234567890"
+    assert video_info_from_dict({}).title == "Untitled"

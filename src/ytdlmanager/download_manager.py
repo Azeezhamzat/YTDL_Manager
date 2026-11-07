@@ -190,6 +190,7 @@ class DownloadWorker(QRunnable):
         cookies_browser: str | None = None,
         js_runtime_path: str | None = None,
         youtube_block: threading.Event | None = None,
+        rate_limit_bps: int | None = None,
     ) -> None:
         super().__init__()
         if item.id is None:
@@ -207,6 +208,7 @@ class DownloadWorker(QRunnable):
         self.path_registry = path_registry
         self.cookies_browser = cookies_browser
         self.js_runtime_path = js_runtime_path
+        self.rate_limit_bps = rate_limit_bps
         self._reserved_path: Path | None = None
         self.setAutoDelete(True)
 
@@ -322,6 +324,7 @@ class DownloadWorker(QRunnable):
                     ffmpeg_location=self.ffmpeg_status.path,
                     cookies_browser=self.cookies_browser,
                     js_runtime_path=self.js_runtime_path,
+                    rate_limit_bps=self.rate_limit_bps,
                 )
                 self.signals.finished.emit(self.item_id, saved_path)
                 return False
@@ -426,11 +429,15 @@ class DownloadManager(QObject):
         concurrency: int = 3,
         retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
         cookies_browser: str | None = None,
+        rate_limit_bps: int | None = None,
     ) -> None:
         super().__init__()
         self.db = db
         self.retry_attempts = retry_attempts
         self.cookies_browser = cookies_browser
+        # Applies to downloads started after it changes (yt-dlp fixes it per
+        # download when the transfer begins).
+        self.rate_limit_bps = rate_limit_bps
         self._concurrency = max(1, concurrency)
         self.pool = QThreadPool()
         self.pool.setMaxThreadCount(self._concurrency)
@@ -575,6 +582,7 @@ class DownloadManager(QObject):
             cookies_browser=self.cookies_browser,
             js_runtime_path=self.js_runtime_path,
             youtube_block=self._youtube_block,
+            rate_limit_bps=self.rate_limit_bps,
         )
         self._live_workers.add(item_id)
         self._busy = True
@@ -626,6 +634,14 @@ class DownloadManager(QObject):
         # hasn't started, so there's nothing to unwind: pause it now.
         if item.status == QueueStatus.QUEUED:
             self._set_status(item, QueueStatus.PAUSED)
+
+    def pause_all(self) -> int:
+        """Pause every queued and downloading item; returns how many."""
+        active = (QueueStatus.QUEUED, QueueStatus.DOWNLOADING)
+        ids = [i.id for i in self.items() if i.id is not None and i.status in active]
+        for item_id in ids:
+            self.pause_item(item_id)
+        return len(ids)
 
     def _cleanup_paused_artifacts(self, item: QueueItem) -> None:
         if not item.working_path:

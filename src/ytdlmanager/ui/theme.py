@@ -251,6 +251,9 @@ QHeaderView::section {{
 QTableCornerButton::section {{ background-color: {header_bg}; border: none; }}
 
 /* -- Menus / status ---------------------------------------------------- */
+QMenuBar {{ background-color: {bg}; border-bottom: 1px solid {border}; }}
+QMenuBar::item {{ padding: 5px 10px; background: transparent; border-radius: 5px; }}
+QMenuBar::item:selected {{ background-color: {header_bg}; }}
 QMenu {{
     background-color: {surface}; color: {text}; border: 1px solid {border};
     border-radius: 8px; padding: 4px;

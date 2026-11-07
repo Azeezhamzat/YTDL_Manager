@@ -182,6 +182,11 @@ class DownloadRequest:
     # When True, ONLY the subtitle file(s) are fetched; no video/audio is
     # downloaded. Requires `subtitle_langs`.
     subtitles_only: bool = False
+    # Highest video resolution to fetch (e.g. 1080), or None for the best
+    # available. Ignored for audio-only and exact-format downloads.
+    max_height: int | None = None
+    # Write title/artist/date tags (and, for audio, cover art) into the file.
+    embed_metadata: bool = False
 
 
 @dataclass
@@ -228,3 +233,9 @@ class AppSettings:
     # None -- the default -- for no cookies at all. Only applied to YouTube
     # URLs; see ytdlp_backend._network_opts.
     cookies_browser: str | None = None
+    # Default "Max quality" for new downloads (pixels high), None = best.
+    default_max_height: int | None = None
+    # Add title/artist tags and (for audio) cover art to downloaded files.
+    embed_metadata: bool = True
+    # Per-download speed cap in bytes per second, None = unlimited.
+    rate_limit_bps: int | None = None

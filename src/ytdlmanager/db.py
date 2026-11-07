@@ -91,6 +91,9 @@ class Database:
             ("retry_attempts", str(settings.retry_attempts)),
             ("check_for_updates", json.dumps(settings.check_for_updates)),
             ("cookies_browser", settings.cookies_browser or ""),
+            ("default_max_height", str(settings.default_max_height or "")),
+            ("embed_metadata", json.dumps(settings.embed_metadata)),
+            ("rate_limit_bps", str(settings.rate_limit_bps or "")),
         ]
         with self._conn:
             self._conn.executemany(
@@ -121,7 +124,31 @@ class Database:
                 rows.get("check_for_updates", json.dumps(defaults.check_for_updates))
             ),
             cookies_browser=rows.get("cookies_browser") or defaults.cookies_browser,
+            default_max_height=_optional_int(rows.get("default_max_height"))
+            or defaults.default_max_height,
+            embed_metadata=json.loads(
+                rows.get("embed_metadata", json.dumps(defaults.embed_metadata))
+            ),
+            rate_limit_bps=_optional_int(rows.get("rate_limit_bps")) or defaults.rate_limit_bps,
         )
+
+    # -- small UI state (window geometry, last page) ------------------------
+    # Kept in the settings table under a "ui." prefix: load_settings() only
+    # reads the keys it knows, so these never leak into AppSettings.
+    def get_value(self, key: str) -> str | None:
+        with closing(
+            self._conn.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        ) as cur:
+            row = cur.fetchone()
+        return row["value"] if row else None
+
+    def set_value(self, key: str, value: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO settings(key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
 
     # -- history --------------------------------------------------------
     def add_history_entry(self, entry: HistoryEntry) -> int:
@@ -245,6 +272,8 @@ def _request_to_json(request: DownloadRequest) -> str:
             "container_ext": request.container_ext,
             "subtitle_langs": request.subtitle_langs,
             "subtitles_only": request.subtitles_only,
+            "max_height": request.max_height,
+            "embed_metadata": request.embed_metadata,
         }
     )
 
@@ -264,7 +293,16 @@ def _request_from_json(raw: str) -> DownloadRequest:
         container_ext=data.get("container_ext"),
         subtitle_langs=data.get("subtitle_langs"),
         subtitles_only=data.get("subtitles_only", False),
+        max_height=data.get("max_height"),
+        embed_metadata=data.get("embed_metadata", False),
     )
+
+
+def _optional_int(raw: str | None) -> int | None:
+    try:
+        return int(raw) if raw else None
+    except ValueError:
+        return None
 
 
 def _row_to_history(row: sqlite3.Row) -> HistoryEntry:

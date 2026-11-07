@@ -6,4 +6,4 @@ otherwise legally authorised to save, using yt-dlp and FFmpeg. All processing
 happens locally; no analytics or telemetry are collected.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

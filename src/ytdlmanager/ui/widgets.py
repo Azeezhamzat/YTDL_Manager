@@ -7,6 +7,7 @@ from PySide6.QtCore import QModelIndex, QPersistentModelIndex, QPoint, QRect, QR
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QFrame,
     QLabel,
     QLayout,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..ytdlp_backend import MAX_HEIGHT_CHOICES
 from . import theme
 
 # Custom item-data roles shared by the table models and these delegates.
@@ -92,6 +94,37 @@ class FlowLayout(QLayout):
             x += hint.width() + self._spacing
             row_height = max(row_height, hint.height())
         return y + row_height - rect.y() + margins.bottom()
+
+
+_QUALITY_LABELS = {
+    2160: "2160p (4K)",
+    1440: "1440p (2K)",
+    1080: "1080p (Full HD)",
+    720: "720p (HD)",
+    480: "480p",
+    360: "360p",
+}
+
+
+def populate_quality_combo(combo: QComboBox, selected: int | None) -> None:
+    """Fill a "Max quality" drop-down. Item data is the height in pixels,
+    or 0 for no limit (QVariant doesn't round-trip None reliably)."""
+    combo.clear()
+    combo.addItem("Best available", 0)
+    for height in MAX_HEIGHT_CHOICES:
+        if height:
+            combo.addItem(_QUALITY_LABELS.get(height, f"{height}p"), height)
+    combo.setCurrentIndex(max(combo.findData(selected or 0), 0))
+    combo.setToolTip(
+        "Highest video resolution to download. Smaller is faster and saves disk\n"
+        "space; if a video has nothing at or below it, the best available is used.\n"
+        "Doesn't apply to audio-only downloads."
+    )
+
+
+def quality_choice(combo: QComboBox) -> int | None:
+    value = combo.currentData()
+    return int(value) if value else None
 
 
 def card(name: str = "card") -> QFrame:

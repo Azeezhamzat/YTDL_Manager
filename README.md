@@ -479,6 +479,35 @@ out. In the Queue and History lists, right-click a row for all its actions
 and double-click a finished download to open it. The app follows your
 system's light/dark setting unless you pick one in Settings.
 
+### Quality, tags and speed
+
+- **Max quality** (Video page and the Playlist panel) caps the resolution:
+  pick 1080p, 720p, 480p… to save time and disk space on big batches. If a
+  video has nothing at or below the cap, the best available is used rather
+  than failing. Set the default in **Settings → Default max quality**.
+- **Tags and cover art** (Settings, on by default): downloads get title,
+  artist and date tags, and audio files (MP3, M4A, Opus, Vorbis, FLAC) get
+  the video's thumbnail as album art, so music players show them properly.
+- **Limit download speed** (Settings) caps each download, so a big playlist
+  doesn't use all your bandwidth.
+
+### Keyboard shortcuts
+
+On a Mac, use ⌘ where this says Ctrl.
+
+| Shortcut | Does |
+|---|---|
+| Ctrl+L | Jump to the link box |
+| Ctrl+Shift+V | Paste a link and fetch it |
+| Ctrl+1 … Ctrl+4 | Video / Playlist / Queue / History |
+| Ctrl+F | Search the playlist or history |
+| Ctrl+Shift+S / Ctrl+Shift+P | Start all / Pause all |
+| Delete or Backspace (in the queue list) | Remove the selected downloads |
+| Ctrl+, | Settings |
+
+You can also drag a link from your browser onto the window to fetch it.
+The window remembers its size, position and last page.
+
 ### Pausing and resuming downloads
 
 Select one or more items in the **Queue** page and use **Pause** /

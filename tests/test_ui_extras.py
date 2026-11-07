@@ -87,3 +87,107 @@ def test_queue_finished_message_and_alert(window, monkeypatch):
 
     assert "3 completed, 1 failed" in window.status_bar.currentMessage()
     alert.assert_called_once()
+
+
+def _loaded_video():
+    from ytdlmanager.models import VideoInfo
+
+    return VideoInfo(
+        video_id="abc12345678", title="Q", url="https://www.youtube.com/watch?v=abc12345678",
+        formats=[],
+    )
+
+
+def test_max_quality_and_tagging_reach_the_download_request(window):
+    window.download_manager.start_item = MagicMock()
+    window._on_video_ready(_loaded_video())
+    window.video_quality_combo.setCurrentIndex(window.video_quality_combo.findData(720))
+
+    window._add_video_to_queue()
+
+    (item,) = window.download_manager.items()
+    assert item.request.max_height == 720
+    assert item.request.embed_metadata is True  # the setting's default
+
+
+def test_best_available_means_no_cap(window):
+    window.download_manager.start_item = MagicMock()
+    window._on_video_ready(_loaded_video())
+    window.video_quality_combo.setCurrentIndex(window.video_quality_combo.findData(0))
+
+    window._add_video_to_queue()
+
+    assert window.download_manager.items()[0].request.max_height is None
+
+
+def test_window_remembers_its_page(qapp, tmp_db_path, tmp_path, monkeypatch):
+    import ytdlmanager.download_manager as download_manager_module
+    import ytdlmanager.ui.main_window as main_window_module
+
+    monkeypatch.setattr(
+        download_manager_module, "find_ffmpeg",
+        lambda *a, **k: FfmpegStatus(found=True, path="/usr/bin/ffmpeg", version="fake"),
+    )
+    db = Database(tmp_db_path)
+    settings = _default_settings()
+    settings.default_download_dir = str(tmp_path)
+    settings.check_for_updates = False
+    try:
+        first = main_window_module.MainWindow(db, settings)
+        first._show_page(main_window_module.PAGE_HISTORY)
+        first._save_window_state()
+
+        second = main_window_module.MainWindow(db, settings)
+        assert second.tabs.currentIndex() == main_window_module.PAGE_HISTORY
+        # Stored beside the settings without disturbing them.
+        assert db.load_settings(settings).concurrency == settings.concurrency
+    finally:
+        db.close()
+
+
+def test_menu_bar_has_settings_quit_and_page_shortcuts(window):
+    from PySide6.QtGui import QAction
+
+    actions = {a.text(): a for a in window.findChildren(QAction) if a.text()}
+    assert actions["Settings…"].menuRole() == QAction.MenuRole.PreferencesRole
+    assert not actions["Settings…"].shortcut().isEmpty()
+    assert actions["Quit YTDL Manager"].menuRole() == QAction.MenuRole.QuitRole
+    assert actions["Queue"].shortcut().toString() in ("Ctrl+3", "⌘3")
+
+    actions["History"].trigger()
+    assert window.tabs.currentIndex() == 3
+
+
+def test_pause_all_button_reports_when_nothing_is_active(window):
+    window._queue_pause_all()
+    assert "Nothing is downloading" in window.status_bar.currentMessage()
+
+
+def test_settings_dialog_round_trips_new_options(qapp):
+    from ytdlmanager.ui.settings_dialog import SettingsDialog
+
+    settings = _default_settings()
+    settings.default_max_height = 1080
+    settings.rate_limit_bps = 2 * 1024**2
+    settings.embed_metadata = False
+    result = SettingsDialog(settings).result_settings()
+
+    assert result.default_max_height == 1080
+    assert result.rate_limit_bps == 2 * 1024**2
+    assert result.embed_metadata is False
+
+
+def test_new_settings_persist(tmp_db_path):
+    settings = _default_settings()
+    settings.default_max_height = 480
+    settings.rate_limit_bps = 1024**2
+    settings.embed_metadata = False
+    db = Database(tmp_db_path)
+    try:
+        db.save_settings(settings)
+        loaded = db.load_settings(_default_settings())
+    finally:
+        db.close()
+    assert (loaded.default_max_height, loaded.rate_limit_bps, loaded.embed_metadata) == (
+        480, 1024**2, False,
+    )

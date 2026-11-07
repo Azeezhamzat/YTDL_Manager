@@ -19,10 +19,22 @@ from PySide6.QtWidgets import (
 from ..config import MAX_CONCURRENCY
 from ..models import AppSettings, DuplicatePolicy
 from ..ytdlp_backend import COOKIE_BROWSER_CHOICES
+from .widgets import populate_quality_combo, quality_choice
 
 # Plain-string userData rather than None for "off": PySide6's QVariant
 # round-trip of None out of a QComboBox isn't reliable.
 _COOKIES_OFF = "off"
+
+# (label, bytes per second); 0 = no limit.
+_SPEED_LIMITS = (
+    ("Unlimited", 0),
+    ("500 KB/s", 500 * 1024),
+    ("1 MB/s", 1024**2),
+    ("2 MB/s", 2 * 1024**2),
+    ("5 MB/s", 5 * 1024**2),
+    ("10 MB/s", 10 * 1024**2),
+    ("25 MB/s", 25 * 1024**2),
+)
 
 
 def _section(title: str) -> tuple[QGroupBox, QFormLayout]:
@@ -82,9 +94,39 @@ class SettingsDialog(QDialog):
         self.duplicate_combo.setAccessibleName("Duplicate file behaviour")
         form.addRow("If a file already exists:", self.duplicate_combo)
 
+        self.quality_combo = QComboBox()
+        populate_quality_combo(self.quality_combo, settings.default_max_height)
+        self.quality_combo.setAccessibleName("Default maximum video quality")
+        form.addRow("Default max quality:", self.quality_combo)
+
+        self.speed_combo = QComboBox()
+        for label, limit in _SPEED_LIMITS:
+            self.speed_combo.addItem(label, limit)
+        idx = self.speed_combo.findData(settings.rate_limit_bps or 0)
+        if idx == -1:  # a custom value stored by a future version
+            self.speed_combo.addItem(f"{settings.rate_limit_bps} bytes/s", settings.rate_limit_bps)
+            idx = self.speed_combo.count() - 1
+        self.speed_combo.setCurrentIndex(idx)
+        self.speed_combo.setAccessibleName("Download speed limit")
+        self.speed_combo.setToolTip(
+            "Caps each download's speed so big batches don't use all your\n"
+            "bandwidth. Applies to downloads that start after you change it."
+        )
+        form.addRow("Limit download speed:", self.speed_combo)
+
         self.preserve_order_check = QCheckBox("Number playlist files in playlist order by default")
         self.preserve_order_check.setChecked(settings.preserve_playlist_order)
         form.addRow("", self.preserve_order_check)
+
+        self.embed_metadata_check = QCheckBox(
+            "Add title and artist tags (and cover art to audio) to downloaded files"
+        )
+        self.embed_metadata_check.setChecked(settings.embed_metadata)
+        self.embed_metadata_check.setToolTip(
+            "So music players and file browsers show the title, artist and\n"
+            "artwork. Cover art is added to MP3, M4A, Opus, Vorbis and FLAC."
+        )
+        form.addRow("", self.embed_metadata_check)
         layout.addWidget(downloads)
 
         # -- YouTube -----------------------------------------------------
@@ -157,6 +199,9 @@ class SettingsDialog(QDialog):
             retry_attempts=self.retry_spin.value(),
             check_for_updates=self.check_updates_check.isChecked(),
             cookies_browser=_cookies_choice(self.cookies_combo.currentData()),
+            default_max_height=quality_choice(self.quality_combo),
+            embed_metadata=self.embed_metadata_check.isChecked(),
+            rate_limit_bps=int(self.speed_combo.currentData() or 0) or None,
         )
 
 
