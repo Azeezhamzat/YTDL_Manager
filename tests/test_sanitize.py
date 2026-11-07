@@ -85,30 +85,34 @@ def test_windows_long_path_noop_for_relative_path(monkeypatch):
     assert windows_long_path(relative) == relative
 
 
-def test_windows_long_path_noop_for_short_absolute_path(monkeypatch):
+# Paths built from tmp_path so they're absolute on every OS the suite runs
+# on: "/aaa/video.mp4" has no drive letter, so on real Windows it isn't
+# absolute and (correctly) gets no prefix.
+def test_windows_long_path_noop_for_short_absolute_path(monkeypatch, tmp_path):
     from ytdlmanager.sanitize import windows_long_path
 
     monkeypatch.setattr("sys.platform", "win32")
-    short_path = Path("/short/path.mp4")
+    short_path = tmp_path / "path.mp4"
     assert windows_long_path(short_path) == short_path
 
 
-def test_windows_long_path_adds_prefix_for_long_absolute_path(monkeypatch):
+def test_windows_long_path_adds_prefix_for_long_absolute_path(monkeypatch, tmp_path):
     from ytdlmanager.sanitize import windows_long_path
 
     monkeypatch.setattr("sys.platform", "win32")
-    long_path = Path("/" + "a" * 300 + "/video.mp4")
+    long_path = tmp_path / ("a" * 300) / "video.mp4"
     result = windows_long_path(long_path)
     assert str(result).startswith("\\\\?\\")
     assert str(long_path) in str(result)
 
 
-def test_windows_long_path_does_not_double_prefix(monkeypatch):
+def test_windows_long_path_does_not_double_prefix(monkeypatch, tmp_path):
     from ytdlmanager.sanitize import windows_long_path
 
     monkeypatch.setattr("sys.platform", "win32")
-    long_path = Path("/" + "a" * 300 + "/video.mp4")
+    long_path = tmp_path / ("a" * 300) / "video.mp4"
     once = windows_long_path(long_path)
+    assert str(once).startswith("\\\\?\\")
     twice = windows_long_path(once)
     assert once == twice
 
