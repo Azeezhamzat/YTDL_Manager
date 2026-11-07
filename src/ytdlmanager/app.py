@@ -56,7 +56,11 @@ def run() -> int:
     _setup_logging()
     app = QApplication(sys.argv)
     app.setApplicationName("YTDLManager")
+    app.setApplicationDisplayName("YTDL Manager")
     app.setOrganizationName("YTDLManager")
+    # Same base style on every OS so the app's stylesheet (ui/theme.py)
+    # renders consistently; set before any widget exists.
+    app.setStyle("Fusion")
 
     db = Database(get_db_path())
     try:

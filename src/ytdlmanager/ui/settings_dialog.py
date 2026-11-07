@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -24,31 +25,53 @@ from ..ytdlp_backend import COOKIE_BROWSER_CHOICES
 _COOKIES_OFF = "off"
 
 
+def _section(title: str) -> tuple[QGroupBox, QFormLayout]:
+    box = QGroupBox(title)
+    form = QFormLayout(box)
+    form.setHorizontalSpacing(14)
+    form.setVerticalSpacing(10)
+    form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+    return box, form
+
+
 class SettingsDialog(QDialog):
     def __init__(self, settings: AppSettings, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(600)
         self._settings = settings
 
         layout = QVBoxLayout(self)
-        form = QFormLayout()
-        layout.addLayout(form)
+        layout.setContentsMargins(18, 10, 18, 16)
+        layout.setSpacing(6)
 
+        # -- Downloads ---------------------------------------------------
+        downloads, form = _section("Downloads")
         dir_row = QHBoxLayout()
         self.dir_edit = QLineEdit(settings.default_download_dir)
         self.dir_edit.setAccessibleName("Default download folder")
+        self.dir_edit.setMinimumWidth(300)
+        self.dir_edit.setToolTip(settings.default_download_dir)
         browse_btn = QPushButton("Browse…")
         browse_btn.clicked.connect(self._browse)
-        dir_row.addWidget(self.dir_edit)
+        dir_row.addWidget(self.dir_edit, stretch=1)
         dir_row.addWidget(browse_btn)
-        form.addRow("Default download folder:", dir_row)
+        form.addRow("Default folder:", dir_row)
 
         self.concurrency_spin = QSpinBox()
         self.concurrency_spin.setRange(1, MAX_CONCURRENCY)
         self.concurrency_spin.setValue(settings.concurrency)
         self.concurrency_spin.setAccessibleName("Concurrent downloads")
-        form.addRow("Concurrent downloads:", self.concurrency_spin)
+        self.concurrency_spin.setToolTip("1-2 is gentler on YouTube for big playlists.")
+        self.concurrency_spin.setMaximumWidth(110)
+        form.addRow("Parallel downloads:", self.concurrency_spin)
+
+        self.retry_spin = QSpinBox()
+        self.retry_spin.setRange(1, 10)
+        self.retry_spin.setValue(settings.retry_attempts)
+        self.retry_spin.setAccessibleName("Retry attempts for temporary failures")
+        self.retry_spin.setMaximumWidth(110)
+        form.addRow("Retry attempts:", self.retry_spin)
 
         self.duplicate_combo = QComboBox()
         self.duplicate_combo.addItem("Rename automatically", DuplicatePolicy.RENAME)
@@ -59,34 +82,13 @@ class SettingsDialog(QDialog):
         self.duplicate_combo.setAccessibleName("Duplicate file behaviour")
         form.addRow("If a file already exists:", self.duplicate_combo)
 
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItem("Match system", "system")
-        self.theme_combo.addItem("Light", "light")
-        self.theme_combo.addItem("Dark", "dark")
-        idx = self.theme_combo.findData(settings.theme)
-        self.theme_combo.setCurrentIndex(max(idx, 0))
-        self.theme_combo.setAccessibleName("Theme")
-        form.addRow("Theme:", self.theme_combo)
-
-        self.retry_spin = QSpinBox()
-        self.retry_spin.setRange(1, 10)
-        self.retry_spin.setValue(settings.retry_attempts)
-        self.retry_spin.setAccessibleName("Retry attempts for temporary failures")
-        form.addRow("Retry attempts:", self.retry_spin)
-
-        self.preserve_order_check = QCheckBox("Preserve playlist order in filenames by default")
+        self.preserve_order_check = QCheckBox("Number playlist files in playlist order by default")
         self.preserve_order_check.setChecked(settings.preserve_playlist_order)
         form.addRow("", self.preserve_order_check)
+        layout.addWidget(downloads)
 
-        self.check_updates_check = QCheckBox("Check for yt-dlp updates on startup")
-        self.check_updates_check.setChecked(settings.check_for_updates)
-        self.check_updates_check.setToolTip(
-            "Looks up the latest yt-dlp version on PyPI on startup (a public,\n"
-            "anonymous version check -- no personal data is sent). yt-dlp needs\n"
-            "to stay current since platforms change often enough to break it."
-        )
-        form.addRow("", self.check_updates_check)
-
+        # -- YouTube -----------------------------------------------------
+        youtube, form = _section("YouTube")
         self.cookies_combo = QComboBox()
         self.cookies_combo.addItem("Off (no cookies)", _COOKIES_OFF)
         for browser in COOKIE_BROWSER_CHOICES:
@@ -105,11 +107,36 @@ class SettingsDialog(QDialog):
         cookies_hint.setObjectName("sectionHint")
         cookies_hint.setWordWrap(True)
         form.addRow("", cookies_hint)
+        layout.addWidget(youtube)
+
+        # -- Appearance & updates ------------------------------------------
+        general, form = _section("Appearance && updates")
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("Match system", "system")
+        self.theme_combo.addItem("Light", "light")
+        self.theme_combo.addItem("Dark", "dark")
+        idx = self.theme_combo.findData(settings.theme)
+        self.theme_combo.setCurrentIndex(max(idx, 0))
+        self.theme_combo.setAccessibleName("Theme")
+        form.addRow("Theme:", self.theme_combo)
+
+        self.check_updates_check = QCheckBox("Check for yt-dlp updates on startup")
+        self.check_updates_check.setChecked(settings.check_for_updates)
+        self.check_updates_check.setToolTip(
+            "Looks up the latest yt-dlp version on PyPI on startup (a public,\n"
+            "anonymous version check -- no personal data is sent). yt-dlp needs\n"
+            "to stay current since platforms change often enough to break it."
+        )
+        form.addRow("", self.check_updates_check)
+        layout.addWidget(general)
 
         button_flags = QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         buttons = QDialogButtonBox(button_flags)
+        save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
+        save_button.setProperty("accent", True)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
+        layout.addSpacing(8)
         layout.addWidget(buttons)
 
     def _browse(self) -> None:

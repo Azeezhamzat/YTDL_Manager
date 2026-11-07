@@ -428,10 +428,21 @@ If something goes wrong, check [Troubleshooting](#troubleshooting).
 
 ## Using the app
 
+The window has a sidebar on the left (**Video**, **Playlist**, **Queue**,
+**History**, plus FFmpeg status, YouTube sign-in, update check and
+Settings) and a link box at the top: paste a link (or press **Paste**), then
+**Fetch** to see its details. On the Video page you can also press
+**Download** straight away — it fetches the details first and then starts.
+Every button is always available: if an action needs something first (a
+loaded video, a selected row), it tells you what instead of being greyed
+out. In the Queue and History lists, right-click a row for all its actions
+and double-click a finished download to open it. The app follows your
+system's light/dark setting unless you pick one in Settings.
+
 ### Pausing and resuming downloads
 
-Select one or more items in the **Queue** tab and use **Pause Selected** /
-**Resume Selected**:
+Select one or more items in the **Queue** page and use **Pause** /
+**Resume**:
 
 - **Pause** stops the transfer but keeps the partial file on disk. Resuming
   continues from where it left off via HTTP range requests (yt-dlp's normal
@@ -497,8 +508,8 @@ doesn't help and retrying makes it worse. When it happens the app:
 You then have two choices:
 
 1. **Wait** — the block usually lifts after a few hours, sometimes a day.
-   Then select the paused items and use **Resume Selected** (or **Start
-   All**), and **Retry Selected** for the one that failed.
+   Then select the paused items and use **Resume** (or **Start all**), and
+   **Retry** for the one that failed.
 2. **Turn on YouTube sign-in** — in **Settings → YouTube sign-in from**, pick
    a browser you're signed in to YouTube with. YouTube requests then use
    that browser's signed-in session, which YouTube doesn't block the same
@@ -509,7 +520,7 @@ You then have two choices:
    YouTube can rate-limit or temporarily restrict an account used this way,
    so a secondary Google account is the safer choice.
 
-Either way, lowering **Concurrent downloads** in Settings to 1–2 for large
+Either way, lowering **Parallel downloads** (on the Queue page, or in Settings) to 1–2 for large
 playlists makes it less likely to happen again.
 
 ## Architecture & why
@@ -603,8 +614,8 @@ Homebrew/`~/.deno` install) and logs which one it's using at startup.
 | "YouTube is blocking requests from this network" / "Sign in to confirm you're not a bot" | YouTube has throttled your network address, usually after heavy downloading. See [When YouTube says "confirm you're not a bot"](#when-youtube-says-confirm-youre-not-a-bot). |
 | "Couldn't read YouTube sign-in cookies from …" | YouTube sign-in is on but the app can't read that browser's cookies. On macOS, choose **Always Allow** when asked for Keychain access; for Safari, give the app Full Disk Access. Or pick a different browser in Settings. |
 | A video fails immediately and never retries | It was classified as a **permanent** failure (private, removed, age-restricted, region-blocked, copyright claim, login-required, etc.) — these are not retried since no amount of retrying fixes them. Check the error message in the Queue or History tab. |
-| A video fails after a few retries with a timeout-like message | Likely a **transient** network issue — check your connection and use "Retry Selected" in the Queue tab. |
-| Downloads didn't resume after restarting the app | This is intentional: interrupted downloads are restored as **Paused**, not auto-resumed, so nothing starts without your explicit action. Use "Start All" or select items and start them. |
+| A video fails after a few retries with a timeout-like message | Likely a **transient** network issue — check your connection and use **Retry** on the Queue page. |
+| Downloads didn't resume after restarting the app | This is intentional: interrupted downloads are restored as **Paused**, not auto-resumed, so nothing starts without your explicit action. Use **Start all**, or select items and press **Resume**. |
 | "Insufficient storage" / download fails partway | The app does a best-effort free-space check before starting; if a download still fails mid-transfer, free up space and retry. |
 | App won't close / asks to confirm | Downloads are still active. Confirming exits anyway (active items become Paused and can be resumed next launch); cancelling the dialog lets you wait or cancel downloads first. |
 | Logs | Written to the same per-OS app data directory as the database — see the log path printed at startup, e.g. `~/Library/Application Support/YTDLManager/ytdlmanager.log` on macOS. |
@@ -637,10 +648,12 @@ Downloader/
 │       ├── retry.py              # bounded exponential backoff
 │       ├── download_manager.py   # queue orchestration, QThreadPool workers, duplicate handling
 │       └── ui/
-│           ├── main_window.py    # main window: URL input, Video/Playlist/Queue/History tabs
+│           ├── main_window.py    # main window: sidebar, link box, Video/Playlist/Queue/History pages
 │           ├── models_qt.py      # Qt table models (playlist selection, queue)
 │           ├── metadata_worker.py# background metadata fetch (QRunnable)
 │           ├── settings_dialog.py
+│           ├── icons.py          # themed line icons (inline SVG)
+│           ├── widgets.py        # wrapping toolbar, status pills, progress bars
 │           └── theme.py          # light/dark stylesheets
 ├── tests/
 │   ├── conftest.py

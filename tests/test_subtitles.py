@@ -206,17 +206,51 @@ def test_ui_subtitles_alongside(window):
     assert item.request.subtitles_only is False
 
 
-def test_ui_subtitles_only_disables_media_options(window):
-    assert not window.video_subtitle_langs_edit.isEnabled()
-    window.video_subtitle_combo.setCurrentIndex(window.video_subtitle_combo.findData("only"))
+def test_ui_subtitles_only_keeps_every_control_available(window):
+    # Nothing is greyed out: the language box and the media options stay
+    # usable whatever the subtitle choice is.
     assert window.video_subtitle_langs_edit.isEnabled()
-    assert not window.video_mode_combo.isEnabled()
+    window.video_subtitle_combo.setCurrentIndex(window.video_subtitle_combo.findData("only"))
+    assert window.video_mode_combo.isEnabled()
+    assert window.video_format_combo.isEnabled()
     window._add_video_to_queue()
     (item,) = window.download_manager.items()
     assert item.request.subtitles_only is True
 
-    window.video_subtitle_combo.setCurrentIndex(window.video_subtitle_combo.findData("none"))
-    assert window.video_mode_combo.isEnabled()
+    # Picking a media mode while "subtitles only" is set means the user
+    # wants the media too: subtitles switch to "save alongside".
+    window._on_video_mode_picked()
+    assert window.video_subtitle_combo.currentData() == "with"
+
+
+def test_ui_typing_a_language_turns_subtitles_on(window):
+    assert window.video_subtitle_combo.currentData() == "none"
+    window.video_subtitle_langs_edit.textEdited.emit("fr")
+    assert window.video_subtitle_combo.currentData() == "with"
+
+
+def test_ui_download_without_fetching_first_fetches_then_queues(window, monkeypatch):
+    # Pressing Download with only a pasted link: fetch, then queue it as soon
+    # as the details arrive (instead of a greyed-out Download button).
+    window._current_video = None
+    fetched = []
+    monkeypatch.setattr(window, "_on_fetch_clicked", lambda: fetched.append(True))
+    window.url_edit.setText("https://www.youtube.com/watch?v=abc12345678")
+
+    window._on_video_download_clicked()
+    assert fetched == [True]
+    assert window.download_manager.items() == []
+
+    window._on_video_ready(
+        VideoInfo(
+            video_id="abc12345678",
+            title="Fetched",
+            url="https://www.youtube.com/watch?v=abc12345678",
+            formats=[],
+        )
+    )
+    (item,) = window.download_manager.items()
+    assert item.request.title == "Fetched"
 
 
 def test_ui_empty_language_field_warns_and_enqueues_nothing(window, monkeypatch):
@@ -256,7 +290,7 @@ def test_ui_playlist_subtitles_apply_to_every_item(window):
         )
     )
     window.playlist_subtitle_combo.setCurrentIndex(window.playlist_subtitle_combo.findData("only"))
-    assert not window.playlist_mode_combo.isEnabled()
+    assert window.playlist_mode_combo.isEnabled()
     window.playlist_subtitle_langs_edit.setText("en")
     window._add_playlist_selection_to_queue()
     items = window.download_manager.items()

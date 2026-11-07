@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPersistentModelIndex, Qt
 
 from ..models import QueueItem, QueueStatus, VideoInfo
+from .widgets import PROGRESS_ROLE, STATUS_ROLE
 
 # PySide6's stubs declare index parameters as this union (a QModelIndex or a
 # QPersistentModelIndex may both be passed by Qt internals).
@@ -83,8 +84,10 @@ class PlaylistTableModel(QAbstractTableModel):
                 return video.channel or ""
             if col == 4:
                 return _format_duration(video.duration_seconds)
-        if role == Qt.ItemDataRole.ToolTipRole and col == 2 and not video.is_available:
-            return video.unavailable_reason or "This item is unavailable"
+        if role == Qt.ItemDataRole.ToolTipRole and col == 2:
+            if not video.is_available:
+                return video.unavailable_reason or "This item is unavailable"
+            return video.title  # full title; the column may cut it short
         return None
 
     def setData(  # noqa: N802
@@ -150,8 +153,12 @@ _STATUS_LABELS = {
 }
 
 
+def status_label(status: QueueStatus) -> str:
+    return _STATUS_LABELS.get(status, status.value)
+
+
 class QueueTableModel(QAbstractTableModel):
-    HEADERS = ["Title", "Status", "Progress", "Speed", "ETA", "Error"]
+    HEADERS = ["Title", "Status", "Progress", "Speed · ETA", "Details"]
 
     def __init__(self) -> None:
         super().__init__()
@@ -198,10 +205,23 @@ class QueueTableModel(QAbstractTableModel):
         return None
 
     def data(self, index: _ModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
-        if not index.isValid() or role != Qt.ItemDataRole.DisplayRole:
+        if not index.isValid():
             return None
         item = self._items[index.row()]
         col = index.column()
+        if role == STATUS_ROLE:
+            return item.status.value
+        if role == PROGRESS_ROLE:
+            return item.progress_percent
+        if role == Qt.ItemDataRole.ToolTipRole:
+            # Full text for cells the column width would otherwise cut off.
+            if col == 0:
+                return f"{item.request.title}\nSaving to: {item.request.destination_dir}"
+            if col == 4 and item.error_message:
+                return item.error_message
+            return None
+        if role != Qt.ItemDataRole.DisplayRole:
+            return None
         if col == 0:
             return item.request.title
         if col == 1:
@@ -209,10 +229,9 @@ class QueueTableModel(QAbstractTableModel):
         if col == 2:
             return f"{item.progress_percent:.0f}%"
         if col == 3:
-            return _format_speed(item.speed_bps)
+            parts = (_format_speed(item.speed_bps), _format_eta(item.eta_seconds))
+            return " · ".join(part for part in parts if part)
         if col == 4:
-            return _format_eta(item.eta_seconds)
-        if col == 5:
             return item.error_message or ""
         return None
 
