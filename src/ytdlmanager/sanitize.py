@@ -12,7 +12,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from .config import MAX_FILENAME_LENGTH
+from .config import MAX_FILENAME_BYTES, MAX_FILENAME_LENGTH
 
 _WINDOWS_MAX_PATH = 260
 _WINDOWS_EXTENDED_PREFIX = "\\\\?\\"
@@ -28,13 +28,19 @@ _WINDOWS_RESERVED_NAMES = {
 }
 
 
-def sanitize_filename(name: str, *, max_length: int = MAX_FILENAME_LENGTH) -> str:
+def sanitize_filename(
+    name: str,
+    *,
+    max_length: int = MAX_FILENAME_LENGTH,
+    max_bytes: int = MAX_FILENAME_BYTES,
+) -> str:
     """Return a filename safe to create on Windows, macOS, and Linux.
 
     - Strips characters illegal on any of the three platforms.
     - Collapses whitespace, strips leading/trailing dots and spaces.
     - Renames Windows-reserved device names (e.g. "CON") to avoid failures.
-    - Truncates to `max_length` characters, preserving the file extension.
+    - Truncates to `max_length` characters and `max_bytes` of UTF-8,
+      preserving the file extension.
     - Falls back to "untitled" if nothing usable remains.
     """
     name = name.strip()
@@ -70,7 +76,23 @@ def sanitize_filename(name: str, *, max_length: int = MAX_FILENAME_LENGTH) -> st
         else:
             full = full[:max_length]
 
+    # Linux filesystems (ext4, btrfs...) cap a name at 255 *bytes*, not
+    # characters: 150 characters of Japanese or emoji is ~450 bytes and the
+    # download would fail with "File name too long". Leave headroom for
+    # what's added later: a "001 - " playlist prefix, a " (12)" duplicate
+    # suffix and yt-dlp's ".f137.webm.part" temporary names.
+    if len(full.encode("utf-8")) > max_bytes:
+        stem, dot, ext = full.rpartition(".") if ext else (full, "", "")
+        budget = max(max_bytes - len(f"{dot}{ext}".encode()), 1)
+        stem = _truncate_utf8(stem, budget).rstrip(". ") or "untitled"
+        full = f"{stem}{dot}{ext}"
+
     return full or "untitled"
+
+
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    """Cut `text` to at most `max_bytes` of UTF-8 without splitting a character."""
+    return text.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
 
 
 def unique_destination(

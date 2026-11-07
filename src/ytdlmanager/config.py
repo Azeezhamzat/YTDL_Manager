@@ -67,6 +67,10 @@ DEFAULT_RETRY_ATTEMPTS = 3
 DEFAULT_RETRY_BASE_DELAY_SECONDS = 2.0
 DEFAULT_RETRY_MAX_DELAY_SECONDS = 30.0
 MAX_FILENAME_LENGTH = 150
+# UTF-8 byte budget for a sanitised title; Linux allows 255 bytes per name
+# and later additions (playlist number, duplicate counter, yt-dlp's temp
+# suffix) need about 30 more. See sanitize.sanitize_filename.
+MAX_FILENAME_BYTES = 200
 LEGAL_NOTICE = (
     "Only download videos you own, that are in the public domain, that carry a "
     "licence permitting download, or for which you otherwise have the rights "

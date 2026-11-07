@@ -7,6 +7,7 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
+from . import __version__
 from .config import (
     DEFAULT_CONCURRENCY,
     DEFAULT_RETRY_ATTEMPTS,
@@ -16,6 +17,7 @@ from .config import (
 )
 from .db import Database
 from .models import AppSettings, DuplicatePolicy
+from .ui.icons import app_icon
 from .ui.main_window import MainWindow
 
 
@@ -57,10 +59,15 @@ def run() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("YTDLManager")
     app.setApplicationDisplayName("YTDL Manager")
+    app.setApplicationVersion(__version__)
     app.setOrganizationName("YTDLManager")
+    # Linux desktops match the running window to its .desktop entry (and so
+    # its icon in the dock/taskbar) by this name; see packaging/linux.
+    app.setDesktopFileName("ytdlmanager")
     # Same base style on every OS so the app's stylesheet (ui/theme.py)
     # renders consistently; set before any widget exists.
     app.setStyle("Fusion")
+    app.setWindowIcon(app_icon())
 
     db = Database(get_db_path())
     try:

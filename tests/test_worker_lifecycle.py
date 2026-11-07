@@ -261,3 +261,85 @@ def test_cleanup_partial_handles_brackets_in_titles(tmp_path):
     DownloadWorker._cleanup_partial(tmp_path, stem)
 
     assert sorted(p.name for p in tmp_path.iterdir()) == [f"{stem}.mp4"]
+
+
+class _OrderRecorder(FakeTransfers):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started: list[str] = []
+
+    def __call__(self, request, **kwargs):
+        self.started.append(request.title)
+        return super().__call__(request, **kwargs)
+
+
+def test_queue_order_decides_what_downloads_next(tmp_db_path, qapp, monkeypatch, tmp_path):
+    # Move up/down used to change only the display: every item had already
+    # been handed to the thread pool, which ran them in the order added.
+    recorder = _OrderRecorder()
+    monkeypatch.setattr(ytdlp_backend, "download_one", recorder)
+    monkeypatch.setattr(dm, "find_ffmpeg", lambda: FfmpegStatus(True, "/usr/bin/ffmpeg", "x"))
+    monkeypatch.setattr(dm, "find_deno", lambda: None)
+    db = Database(tmp_db_path)
+    manager = DownloadManager(db, concurrency=1)
+    try:
+        items = manager.enqueue_many([_request(f"O{i}", tmp_path) for i in range(4)])
+        for item in items:
+            manager.start_item(item.id)
+        pump(qapp, lambda: recorder.started == ["O0"])
+
+        # While O0 runs, move O3 to the front of what's left.
+        ids = [i.id for i in items]
+        manager.reorder([ids[0], ids[3], ids[1], ids[2]])
+        recorder.release.set()
+        manager.pool.waitForDone(5000)
+        pump(qapp, lambda: len(recorder.started) == 4, timeout=5)
+
+        assert recorder.started == ["O0", "O3", "O1", "O2"]
+    finally:
+        recorder.release.set()
+        manager.pool.waitForDone(5000)
+        db.close()
+
+
+def test_raising_parallel_downloads_starts_waiting_items_now(manager, transfers, tmp_path, qapp):
+    items = manager.enqueue_many([_request(f"P{i}", tmp_path) for i in range(3)])
+    for item in items:
+        manager.start_item(item.id)
+    pump(qapp, lambda: transfers.calls["P0"] == 1)
+    assert transfers.calls["P1"] == 0  # concurrency is 1
+
+    manager.set_concurrency(3)
+    pump(qapp, lambda: transfers.calls["P1"] == 1 and transfers.calls["P2"] == 1)
+
+    assert manager.pool.activeThreadCount() == 3
+    _finish_all(manager, transfers, qapp)
+
+
+def test_queue_finished_reports_counts_once_the_queue_runs_dry(
+    manager, transfers, tmp_path, qapp
+):
+    transfers.fail_with["F-bad"] = ytdlp_backend.DownloadError("HTTP Error 404", is_permanent=True)
+    finished: list[tuple[int, int]] = []
+    manager.queue_finished.connect(lambda done, failed: finished.append((done, failed)))
+    items = manager.enqueue_many([_request("F-good", tmp_path), _request("F-bad", tmp_path)])
+    for item in items:
+        manager.start_item(item.id)
+
+    _finish_all(manager, transfers, qapp)
+    pump(qapp, lambda: bool(finished))
+
+    assert finished == [(1, 1)]
+
+
+def test_pausing_everything_is_not_reported_as_finished(manager, transfers, tmp_path, qapp):
+    finished: list[tuple[int, int]] = []
+    manager.queue_finished.connect(lambda done, failed: finished.append((done, failed)))
+    item = manager.enqueue(_request("Z", tmp_path))
+    manager.start_item(item.id)
+    pump(qapp, lambda: _status(manager, item.id) == QueueStatus.DOWNLOADING)
+
+    manager.pause_item(item.id)
+    pump(qapp, lambda: _status(manager, item.id) == QueueStatus.PAUSED)
+
+    assert finished == []

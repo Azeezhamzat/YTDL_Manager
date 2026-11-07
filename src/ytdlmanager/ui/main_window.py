@@ -78,6 +78,7 @@ from ..ytdlp_backend import (
 )
 from . import icons
 from . import theme as theme_mod
+from .about_dialog import AboutDialog
 from .metadata_worker import MetadataFetchWorker
 from .models_qt import PlaylistTableModel, QueueTableModel, status_label
 from .settings_dialog import SettingsDialog
@@ -160,8 +161,12 @@ class MainWindow(QMainWindow):
         self.db = db
         self.settings = settings
         self.setWindowTitle("YTDL Manager")
+        self.setWindowIcon(icons.app_icon())
         self.setMinimumSize(900, 600)
         self.resize(1180, 760)
+        # Dropping a link (from a browser's address bar, a page, or a text
+        # file) anywhere on the window fetches it.
+        self.setAcceptDrops(True)
 
         self.download_manager = DownloadManager(
             db,
@@ -177,6 +182,7 @@ class MainWindow(QMainWindow):
         self.download_manager.item_skipped.connect(self._on_item_skipped)
         self.download_manager.queue_changed.connect(self._refresh_queue_table)
         self.download_manager.youtube_blocked.connect(self._on_youtube_blocked)
+        self.download_manager.queue_finished.connect(self._on_queue_finished)
         self._last_bot_notice = float("-inf")
 
         self._metadata_pool = QThreadPool()
@@ -314,8 +320,12 @@ class MainWindow(QMainWindow):
         settings_btn.setObjectName("sideButton")
         icons.set_icon(settings_btn, "settings")
         settings_btn.clicked.connect(self._open_settings)
+        about_btn = QPushButton("About")
+        about_btn.setObjectName("sideButton")
+        icons.set_icon(about_btn, "info")
+        about_btn.clicked.connect(self._open_about)
         for button in (self.ffmpeg_status_btn, self.signin_btn, self.check_updates_btn,
-                       settings_btn):
+                       settings_btn, about_btn):
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             layout.addWidget(button)
         return side
@@ -1446,6 +1456,32 @@ class MainWindow(QMainWindow):
             )
         QMessageBox.warning(self, "YouTube is blocking downloads", body)
 
+    def _on_queue_finished(self, completed: int, failed: int) -> None:
+        summary = f"All downloads finished: {completed} completed"
+        if failed:
+            summary += f", {failed} failed (see the Queue page)"
+        self.status_bar.showMessage(summary, 15000)
+        # Bounces the Dock icon on macOS / flashes the taskbar button on
+        # Windows and Linux -- only when the user is looking elsewhere.
+        if not self.isActiveWindow():
+            QApplication.alert(self)
+
+    # ------------------------------------------------------- drag and drop
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if _dropped_link(event.mimeData()):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        link = _dropped_link(event.mimeData())
+        if not link:
+            return
+        event.acceptProposedAction()
+        self.url_edit.setText(link)
+        if classify_url(link) != MediaKind.INVALID:
+            self._on_fetch_clicked()
+        else:
+            self.status_bar.showMessage("That dropped link isn't from a supported site", 5000)
+
     def _on_item_skipped(self, item_id: int, reason: str) -> None:
         item = self.download_manager.get_item(item_id)
         if item:
@@ -1570,6 +1606,13 @@ class MainWindow(QMainWindow):
         self.signin_btn.setText(
             f"YouTube sign-in: {browser.capitalize()}" if browser else "YouTube sign-in: Off"
         )
+
+    def _open_about(self) -> None:
+        AboutDialog(
+            self.download_manager.refresh_ffmpeg_status(),
+            self.download_manager.js_runtime_path,
+            self,
+        ).exec()
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self.settings, self)
@@ -1741,6 +1784,19 @@ class MainWindow(QMainWindow):
         self.download_manager.shutdown()
         self._metadata_pool.clear()
         event.accept()
+
+
+def _dropped_link(mime) -> str | None:
+    """The first web link in dropped data (a dragged URL or plain text)."""
+    if mime.hasUrls():
+        for url in mime.urls():
+            if url.scheme() in ("http", "https"):
+                return url.toString()
+    if mime.hasText():
+        text = mime.text().strip()
+        if text.startswith(("http://", "https://")) and len(text.split()) == 1:
+            return text
+    return None
 
 
 def _format_timestamp(iso: str) -> str:

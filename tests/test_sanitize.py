@@ -111,3 +111,33 @@ def test_windows_long_path_does_not_double_prefix(monkeypatch):
     once = windows_long_path(long_path)
     twice = windows_long_path(once)
     assert once == twice
+
+
+def test_long_non_latin_titles_fit_linux_byte_limit():
+    # ext4 and friends allow 255 *bytes* per name; 150 characters of
+    # Japanese is ~450. The sanitised title must leave room for the
+    # playlist prefix, duplicate counter and yt-dlp's temp suffix.
+    title = "日本語のタイトル" * 19
+    name = sanitize_filename(title)
+    assert len(name.encode("utf-8")) <= 200
+    longest_on_disk = f"001 - {name} (12).f137.webm.part"
+    assert len(longest_on_disk.encode("utf-8")) <= 255
+    assert name.startswith("日本語のタイトル")
+
+
+def test_byte_truncation_never_splits_a_character():
+    name = sanitize_filename("😀" * 120)  # 4 bytes each
+    name.encode("utf-8")  # would raise on a split surrogate/partial sequence
+    assert set(name) == {"😀"}
+    assert len(name.encode("utf-8")) <= 200
+
+
+def test_byte_truncation_keeps_the_extension():
+    name = sanitize_filename("ü" * 140 + ".mp4", max_bytes=100)
+    assert name.endswith(".mp4")
+    assert len(name.encode("utf-8")) <= 100
+
+
+def test_ascii_titles_are_unchanged_by_the_byte_limit():
+    title = "A" * 150
+    assert sanitize_filename(title) == title

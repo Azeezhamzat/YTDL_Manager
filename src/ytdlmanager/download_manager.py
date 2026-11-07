@@ -416,6 +416,9 @@ class DownloadManager(QObject):
     # A download hit YouTube's bot check; carries how many queued YouTube
     # items were paused in response (see _pause_pending_youtube_items).
     youtube_blocked = Signal(int)
+    # The queue ran dry after doing some work: (completed, failed) counts
+    # since it last became busy.
+    queue_finished = Signal(int, int)
 
     def __init__(
         self,
@@ -428,17 +431,26 @@ class DownloadManager(QObject):
         self.db = db
         self.retry_attempts = retry_attempts
         self.cookies_browser = cookies_browser
+        self._concurrency = max(1, concurrency)
         self.pool = QThreadPool()
-        self.pool.setMaxThreadCount(max(1, concurrency))
+        self.pool.setMaxThreadCount(self._concurrency)
         self._items: dict[int, QueueItem] = {}
         self._cancel_tokens: dict[int, _CancelToken] = {}
-        # Items whose worker has been handed to the pool and hasn't reported
-        # a terminal signal yet -- including workers still waiting for a free
-        # slot. There must never be two workers for one item: the second
-        # would download the same file again (or into the same .part at the
-        # same time) and replace the first one's cancel token, so Pause and
-        # Cancel could no longer reach the first.
+        # Items whose worker has been started and hasn't reported a terminal
+        # signal yet. There must never be two workers for one item: the
+        # second would download the same file again (or into the same .part
+        # at the same time) and replace the first one's cancel token, so
+        # Pause and Cancel could no longer reach the first.
         self._live_workers: set[int] = set()
+        # Items the user has started that are waiting for a free slot. They
+        # get no worker until _dispatch() picks them -- lowest queue position
+        # first -- so Move up/down decides what downloads next, and pausing
+        # or removing a waiting item has nothing to unwind. (Handing every
+        # item to the QThreadPool up front ran them in the order they were
+        # added, whatever the queue showed.)
+        self._waiting: set[int] = set()
+        self._busy = False
+        self._run_counts = {"completed": 0, "failed": 0}
         # Items resumed while their worker was still acknowledging a pause;
         # restarted as soon as that worker reports `paused`.
         self._restart_after_exit: set[int] = set()
@@ -466,7 +478,11 @@ class DownloadManager(QObject):
         self._signals.status_changed.connect(self._on_status_changed)
 
     def set_concurrency(self, concurrency: int) -> None:
-        self.pool.setMaxThreadCount(max(1, concurrency))
+        """Takes effect immediately: raising it starts waiting items now;
+        lowering it lets running downloads finish and starts fewer after."""
+        self._concurrency = max(1, concurrency)
+        self.pool.setMaxThreadCount(self._concurrency)
+        self._dispatch()
 
     def refresh_ffmpeg_status(self) -> FfmpegStatus:
         self._ffmpeg_status = find_ffmpeg()
@@ -499,11 +515,11 @@ class DownloadManager(QObject):
         return [self.enqueue(req) for req in requests]
 
     def start_item(self, item_id: int) -> None:
-        """Hand a queued or paused item to the pool. A no-op for an item that
-        already has a live worker (waiting or running) or any other status,
-        so it's safe to call on a mixed selection."""
+        """Queue a queued or paused item to run as soon as a slot is free. A
+        no-op for an item that's already running or waiting, or has any
+        other status, so it's safe to call on a mixed selection."""
         item = self._items.get(item_id)
-        if item is None:
+        if item is None or item_id in self._waiting:
             return
         if item_id in self._live_workers:
             token = self._cancel_tokens.get(item_id)
@@ -521,6 +537,32 @@ class DownloadManager(QObject):
         if item.status != QueueStatus.QUEUED:
             return
         self._youtube_block.clear()
+        self._waiting.add(item_id)
+        self._dispatch()
+
+    def _dispatch(self) -> None:
+        """Start waiting items, lowest queue position first, until every
+        slot is busy. Called whenever a slot may have freed up."""
+        while self._waiting and len(self._live_workers) < self._concurrency:
+            candidates = [self._items[i] for i in self._waiting if i in self._items]
+            if not candidates:
+                self._waiting.clear()
+                break
+            item = min(candidates, key=lambda i: (i.position, i.id or 0))
+            assert item.id is not None  # every tracked item is persisted
+            self._waiting.discard(item.id)
+            if item.status == QueueStatus.QUEUED:
+                self._launch(item)
+        if self._busy and not self._live_workers and not self._waiting:
+            self._busy = False
+            completed, failed = self._run_counts["completed"], self._run_counts["failed"]
+            self._run_counts = {"completed": 0, "failed": 0}
+            if completed or failed:
+                self.queue_finished.emit(completed, failed)
+
+    def _launch(self, item: QueueItem) -> None:
+        assert item.id is not None  # every tracked item is persisted
+        item_id = item.id
         token = _CancelToken()
         self._cancel_tokens[item_id] = token
         worker = DownloadWorker(
@@ -535,6 +577,7 @@ class DownloadManager(QObject):
             youtube_block=self._youtube_block,
         )
         self._live_workers.add(item_id)
+        self._busy = True
         self.pool.start(worker)
 
     def start_all_queued(self) -> None:
@@ -546,6 +589,7 @@ class DownloadManager(QObject):
 
     def cancel_item(self, item_id: int) -> None:
         self._restart_after_exit.discard(item_id)
+        self._waiting.discard(item_id)
         token = self._cancel_tokens.get(item_id)
         if token:
             token.cancelled = True
@@ -570,11 +614,11 @@ class DownloadManager(QObject):
         if item is None or item.status not in (QueueStatus.DOWNLOADING, QueueStatus.QUEUED):
             return
         self._restart_after_exit.discard(item_id)
+        self._waiting.discard(item_id)
         token = self._cancel_tokens.get(item_id)
         if token:
-            # Also reaches a worker still waiting in the pool for a slot: it
-            # checks the token before doing anything else and exits as
-            # paused. Without this it would start downloading anyway.
+            # A worker that has started but not yet begun the transfer checks
+            # the token before doing anything else and exits as paused.
             token.pause_requested = True
         # A downloading item flips to PAUSED once the worker acknowledges
         # (via the `paused` signal -> _on_paused) -- an in-flight network
@@ -620,6 +664,7 @@ class DownloadManager(QObject):
                 # the queue, invisibly. The worker deletes its own partials.
                 token.cancelled = True
             self._restart_after_exit.discard(item_id)
+            self._waiting.discard(item_id)
             self._items.pop(item_id, None)
         self.db.remove_queue_items(item_ids)
         self._reindex_positions()
@@ -684,35 +729,40 @@ class DownloadManager(QObject):
             item.eta_seconds = eta
         self.item_progress.emit(item_id, percent, speed, eta)
 
+    # Each terminal handler frees the item's slot and ends with _dispatch()
+    # -- after any side effects (e.g. pausing YouTube items on a bot check),
+    # so the next item to start is chosen with those already applied.
     def _on_finished(self, item_id: int, saved_path: str) -> None:
         self._live_workers.discard(item_id)
         item = self._items.get(item_id)
-        if not item:
-            return
-        item.saved_path = saved_path
-        item.progress_percent = 100.0
-        item.working_path = None  # done -- saved_path is the source of truth now
-        self._set_status(item, QueueStatus.COMPLETED)
-        self._record_history(item, QueueStatus.COMPLETED)
-        self.item_finished.emit(item_id, saved_path)
+        if item:
+            item.saved_path = saved_path
+            item.progress_percent = 100.0
+            item.working_path = None  # done -- saved_path is the source of truth now
+            self._set_status(item, QueueStatus.COMPLETED)
+            self._record_history(item, QueueStatus.COMPLETED)
+            self._run_counts["completed"] += 1
+            self.item_finished.emit(item_id, saved_path)
+        self._dispatch()
 
     def _on_failed(self, item_id: int, message: str, is_permanent: bool) -> None:
         self._live_workers.discard(item_id)
         item = self._items.get(item_id)
-        if not item:
-            return
-        item.error_message = message
-        item.attempts += 1
-        # The worker already deleted the partial file for a failure (see
-        # DownloadWorker._cleanup_partial), so nothing is left to resume --
-        # clear working_path so a later retry re-resolves duplicates fresh
-        # rather than trying to reuse a path that no longer has data in it.
-        item.working_path = None
-        self._set_status(item, QueueStatus.FAILED)
-        self._record_history(item, QueueStatus.FAILED)
-        self.item_failed.emit(item_id, message, is_permanent)
-        if ytdlp_backend.is_bot_check_error(message):
-            self.youtube_blocked.emit(self._pause_pending_youtube_items())
+        if item:
+            item.error_message = message
+            item.attempts += 1
+            # The worker already deleted the partial file for a failure (see
+            # DownloadWorker._cleanup_partial), so nothing is left to resume
+            # -- clear working_path so a later retry re-resolves duplicates
+            # fresh rather than reusing a path that has no data in it.
+            item.working_path = None
+            self._set_status(item, QueueStatus.FAILED)
+            self._record_history(item, QueueStatus.FAILED)
+            self._run_counts["failed"] += 1
+            self.item_failed.emit(item_id, message, is_permanent)
+            if ytdlp_backend.is_bot_check_error(message):
+                self.youtube_blocked.emit(self._pause_pending_youtube_items())
+        self._dispatch()
 
     def _pause_pending_youtube_items(self) -> int:
         """YouTube's bot check applies to the whole network address, not one
@@ -734,35 +784,35 @@ class DownloadManager(QObject):
     def _on_skipped(self, item_id: int, reason: str) -> None:
         self._live_workers.discard(item_id)
         item = self._items.get(item_id)
-        if not item:
-            return
-        item.error_message = reason
-        self._set_status(item, QueueStatus.SKIPPED)
-        self._record_history(item, QueueStatus.SKIPPED)
-        self.item_skipped.emit(item_id, reason)
+        if item:
+            item.error_message = reason
+            self._set_status(item, QueueStatus.SKIPPED)
+            self._record_history(item, QueueStatus.SKIPPED)
+            self.item_skipped.emit(item_id, reason)
+        self._dispatch()
 
     def _on_cancelled(self, item_id: int) -> None:
         self._live_workers.discard(item_id)
         item = self._items.get(item_id)
-        if not item:
-            return
-        item.working_path = None  # the worker already deleted the partial file
-        self._set_status(item, QueueStatus.CANCELLED)
-        self._record_history(item, QueueStatus.CANCELLED)
-        self.item_cancelled.emit(item_id)
+        if item:
+            item.working_path = None  # the worker already deleted the partial file
+            self._set_status(item, QueueStatus.CANCELLED)
+            self._record_history(item, QueueStatus.CANCELLED)
+            self.item_cancelled.emit(item_id)
+        self._dispatch()
 
     def _on_paused(self, item_id: int) -> None:
         self._live_workers.discard(item_id)
         item = self._items.get(item_id)
-        if not item:
-            return
-        # No history entry: unlike the other worker outcomes, a pause isn't
-        # a terminal result -- it's a resumable in-progress state, exactly
-        # like a queued item that hasn't started yet.
-        self._set_status(item, QueueStatus.PAUSED)
-        if item_id in self._restart_after_exit:
-            self._restart_after_exit.discard(item_id)
-            self.start_item(item_id)
+        if item:
+            # No history entry: unlike the other worker outcomes, a pause
+            # isn't a terminal result -- it's a resumable in-progress state,
+            # exactly like a queued item that hasn't started yet.
+            self._set_status(item, QueueStatus.PAUSED)
+            if item_id in self._restart_after_exit:
+                self._restart_after_exit.discard(item_id)
+                self.start_item(item_id)
+        self._dispatch()
 
     def _on_working_path_resolved(self, item_id: int, path: str) -> None:
         item = self._items.get(item_id)
@@ -804,6 +854,7 @@ class DownloadManager(QObject):
         next launch.
         """
         self._restart_after_exit.clear()
+        self._waiting.clear()  # never started: they simply stay "Queued"
         for item_id, token in self._cancel_tokens.items():
             token.pause_requested = True
             item = self._items.get(item_id)

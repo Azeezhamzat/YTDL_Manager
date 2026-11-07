@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ytdlmanager"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Local social media (YouTube/TikTok/Twitter/Instagram/Facebook/Vimeo) download manager for content you own or are authorised to save"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,6 +31,10 @@ dev = [
 
 [project.scripts]
 ytdlmanager = "ytdlmanager.__main__:main"
+
+[tool.setuptools.dynamic]
+# Single source of truth: ytdlmanager/__init__.py (the build spec reads it too).
+version = { attr = "ytdlmanager.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

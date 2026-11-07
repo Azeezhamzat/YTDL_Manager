@@ -89,6 +89,44 @@ def icon(name: str, role: str = "text", size: int = 18) -> QIcon:
     return QIcon(pixmap)
 
 
+# The application icon: a white download arrow on a blue-violet rounded
+# square, inset like macOS app icons. packaging/make_icons.py renders the
+# platform icon files (.icns, .ico, .png) from this same source.
+APP_ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0" stop-color="#4f8cff"/><stop offset="1" stop-color="#6a3df0"/>
+</linearGradient>
+<linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+<stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+</linearGradient>
+</defs>
+<rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+<rect x="100" y="100" width="824" height="824" rx="186" fill="url(#shine)"/>
+<g fill="none" stroke="#ffffff" stroke-width="78" stroke-linecap="round" stroke-linejoin="round">
+<path d="M512 270v330"/><path d="M362 460l150 150 150-150"/><path d="M322 742h380"/>
+</g>
+</svg>"""
+
+
+def render_app_icon(size: int) -> QPixmap:
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    QSvgRenderer(QByteArray(APP_ICON_SVG.encode())).render(painter)
+    painter.end()
+    return pixmap
+
+
+def app_icon() -> QIcon:
+    themed = QIcon()
+    for size in (16, 24, 32, 48, 64, 128, 256, 512):
+        themed.addPixmap(render_app_icon(size))
+    return themed
+
+
 def set_icon(widget: QWidget, name: str, role: str = "text", size: int = 18) -> None:
     """Give a button (or a label) a themed icon that follows theme changes."""
     widget.setProperty("iconName", name)
